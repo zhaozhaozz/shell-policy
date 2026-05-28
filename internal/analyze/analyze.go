@@ -93,6 +93,9 @@ func mergeContext(child, parent ir.Context) ir.Context {
 	if parent.PrivilegeEscalated {
 		out.PrivilegeEscalated = true
 	}
+	if parent.Background {
+		out.Background = true
+	}
 	return out
 }
 
@@ -246,6 +249,18 @@ func joinArgvText(args []ir.ArgValue) string {
 			raw = a.Value
 		}
 		parts = append(parts, raw)
+	}
+	return strings.Join(parts, " ")
+}
+
+func joinArgvValues(args []ir.ArgValue) string {
+	parts := make([]string, 0, len(args))
+	for _, a := range args {
+		if a.Value != "" {
+			parts = append(parts, a.Value)
+			continue
+		}
+		parts = append(parts, a.Raw)
 	}
 	return strings.Join(parts, " ")
 }

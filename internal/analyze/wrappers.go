@@ -72,6 +72,12 @@ func extractStringFlag(args []ir.ArgValue, names ...string) (val string, rest []
 				matched = true
 				break
 			}
+			if isShortFlag(n) && strings.HasPrefix(a.Value, n) && a.Value != n {
+				val = a.Value[len(n):]
+				ok = true
+				matched = true
+				break
+			}
 			if strings.HasPrefix(a.Value, n+"=") {
 				val = a.Value[len(n)+1:]
 				ok = true
@@ -95,7 +101,7 @@ func extractBoolFlag(args []ir.ArgValue, names ...string) (bool, []ir.ArgValue) 
 		if a.Confidence == ir.ConfStatic {
 			matched := false
 			for _, n := range names {
-				if a.Value == n {
+				if a.Value == n || containsShortBoolFlag(a.Value, n) {
 					found = true
 					matched = true
 					break
@@ -158,7 +164,6 @@ func (a *Analyzer) wrapSudo(c *ir.Command) *ir.WrapperInfo {
 			continue
 		case "--":
 			args = args[1:]
-			break
 		}
 		// Unknown sudo flag — stop consuming so we don't accidentally drop
 		// a positional that begins with `-`.
@@ -180,6 +185,49 @@ func (a *Analyzer) wrapSudo(c *ir.Command) *ir.WrapperInfo {
 		InnerText:    innerText,
 		InnerCommand: inner,
 	}
+}
+
+func consumeLeadingStringFlag(args []ir.ArgValue, names ...string) ([]ir.ArgValue, bool) {
+	if len(args) == 0 || args[0].Confidence != ir.ConfStatic {
+		return args, false
+	}
+	value := args[0].Value
+	for _, name := range names {
+		if value == name {
+			if len(args) >= 2 {
+				return args[2:], true
+			}
+			return args[1:], true
+		}
+		if strings.HasPrefix(value, name+"=") || (isShortFlag(name) && strings.HasPrefix(value, name) && value != name) {
+			return args[1:], true
+		}
+	}
+	return args, false
+}
+
+func consumeLeadingBoolFlag(args []ir.ArgValue, names ...string) ([]ir.ArgValue, bool) {
+	if len(args) == 0 || args[0].Confidence != ir.ConfStatic {
+		return args, false
+	}
+	value := args[0].Value
+	for _, name := range names {
+		if value == name || containsShortBoolFlag(value, name) {
+			return args[1:], true
+		}
+	}
+	return args, false
+}
+
+func isShortFlag(name string) bool {
+	return len(name) == 2 && strings.HasPrefix(name, "-") && !strings.HasPrefix(name, "--")
+}
+
+func containsShortBoolFlag(value, name string) bool {
+	if !isShortFlag(name) || !strings.HasPrefix(value, "-") || strings.HasPrefix(value, "--") || value == "-" {
+		return false
+	}
+	return strings.Contains(value[1:], name[1:])
 }
 
 func (a *Analyzer) wrapEnv(c *ir.Command) *ir.WrapperInfo {
@@ -294,7 +342,7 @@ func (a *Analyzer) wrapSSH(c *ir.Command) *ir.WrapperInfo {
 	if len(rest) == 0 {
 		return &ir.WrapperInfo{Type: "ssh", Outer: "ssh", Host: host, User: user}
 	}
-	innerText := joinArgvText(rest)
+	innerText := joinArgvValues(rest)
 	innerCtx := c.Context
 	innerCtx.InRemoteCommand = true
 	innerCtx.RemoteHost = host
@@ -417,17 +465,16 @@ func (a *Analyzer) wrapKubectl(c *ir.Command) *ir.WrapperInfo {
 		return nil
 	}
 	args = args[1:]
-	for _, f := range []string{"-n", "--namespace", "-c", "--container"} {
-		for {
-			_, rest, ok := extractStringFlag(args, f)
-			if !ok {
-				break
-			}
+	for len(args) > 0 {
+		if rest, ok := consumeLeadingStringFlag(args, "-n", "--namespace", "-c", "--container"); ok {
 			args = rest
+			continue
 		}
-	}
-	for _, f := range []string{"-i", "--stdin", "-t", "--tty"} {
-		_, args = extractBoolFlag(args, f)
+		if rest, ok := consumeLeadingBoolFlag(args, "-i", "--stdin", "-t", "--tty"); ok {
+			args = rest
+			continue
+		}
+		break
 	}
 	if len(args) == 0 {
 		return &ir.WrapperInfo{Type: "kubectl_exec", Outer: "kubectl exec"}
@@ -456,6 +503,7 @@ func (a *Analyzer) wrapKubectl(c *ir.Command) *ir.WrapperInfo {
 
 func (a *Analyzer) wrapFindExec(c *ir.Command) *ir.WrapperInfo {
 	args := c.Simple.Argv[1:]
+	roots := findSearchRoots(args)
 	// Find -exec / -execdir consumes args until ';' or '+'.
 	for i := 0; i < len(args); i++ {
 		v := args[i].Value
@@ -483,17 +531,32 @@ func (a *Analyzer) wrapFindExec(c *ir.Command) *ir.WrapperInfo {
 			}
 		}
 		if v == "-delete" {
-			// `find -delete` is itself a delete operation. We expose this as
-			// an inner op via a synthesized rm-equivalent simple command so
-			// the policy chain sees a file_delete operation.
+			innerText := "rm " + joinArgvText(roots)
 			return &ir.WrapperInfo{
-				Type:      "find_delete",
-				Outer:     "find -delete",
-				InnerText: "rm",
+				Type:         "find_delete",
+				Outer:        "find -delete",
+				InnerText:    innerText,
+				InnerCommand: a.parseInner(innerText, c.Context),
 			}
 		}
 	}
 	return nil
+}
+
+func findSearchRoots(args []ir.ArgValue) []ir.ArgValue {
+	roots := []ir.ArgValue{}
+	for _, a := range args {
+		if a.Confidence == ir.ConfStatic {
+			if strings.HasPrefix(a.Value, "-") || a.Value == "(" || a.Value == "!" {
+				break
+			}
+		}
+		roots = append(roots, a)
+	}
+	if len(roots) == 0 {
+		return []ir.ArgValue{{Raw: ".", Value: ".", Confidence: ir.ConfStatic}}
+	}
+	return roots
 }
 
 func (a *Analyzer) wrapXargs(c *ir.Command) *ir.WrapperInfo {

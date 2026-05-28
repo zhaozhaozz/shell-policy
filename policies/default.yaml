@@ -282,6 +282,12 @@ rules:
             in: ["inside_workspace", "tmp"]
         - command.hasDynamicArgs:
             equals: false
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
     action: "allow_readonly"
     terminal: true
 
@@ -294,6 +300,12 @@ rules:
             equals: "git"
         - operation.type:
             equals: "git_read"
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
     action: "allow_readonly"
     terminal: true
 
@@ -306,6 +318,12 @@ rules:
             in: ["docker", "podman"]
         - operation.type:
             equals: "container_read"
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
     action: "allow_readonly"
     terminal: true
 

@@ -33,13 +33,13 @@ type Spec struct {
 
 // Parsed is the result of argv parsing.
 type Parsed struct {
-	Program        string
-	Args           []ir.ArgValue       // original argv minus program
-	Flags          map[string]any      // flag_name → value (true | string | []string)
-	RawFlags       map[string]any      // unrecognised flags by their literal spelling
-	Positionals    []ir.ArgValue
+	Program         string
+	Args            []ir.ArgValue  // original argv minus program
+	Flags           map[string]any // flag_name → value (true | string | []string)
+	RawFlags        map[string]any // unrecognised flags by their literal spelling
+	Positionals     []ir.ArgValue
 	AfterDoubleDash []ir.ArgValue
-	HasDynamic     bool
+	HasDynamic      bool
 }
 
 // Parse parses argv against a Spec. argv[0] is treated as the program
@@ -77,6 +77,7 @@ func Parse(argv []ir.ArgValue, spec Spec) *Parsed {
 
 		if pastDoubleDash {
 			out.AfterDoubleDash = append(out.AfterDoubleDash, a)
+			out.Positionals = append(out.Positionals, a)
 			continue
 		}
 

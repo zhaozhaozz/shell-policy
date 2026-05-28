@@ -1,6 +1,8 @@
 package analyze
 
 import (
+	"strings"
+
 	"github.com/self/shell_permission/internal/argv"
 	"github.com/self/shell_permission/internal/ir"
 	"github.com/self/shell_permission/internal/paths"
@@ -410,6 +412,7 @@ func init() {
 				Dynamic:    p.HasDynamic,
 				Context:    c.Context,
 			}}
+			ops = append(ops, curlFileReadOps(c, p, r)...)
 			if out := stringFlag(p, "output"); out != "" {
 				ops = append(ops, ir.ResourceOp{
 					Type:       ir.OpFileWrite,
@@ -450,6 +453,15 @@ func init() {
 				Dynamic:    p.HasDynamic,
 				Context:    c.Context,
 			}}
+			if post := stringFlag(p, "post"); post != "" {
+				ops = append(ops, ir.ResourceOp{
+					Type:       ir.OpFileRead,
+					Paths:      []ir.NormalizedPath{r.ResolveString(post)},
+					Confidence: confOf(c.Simple),
+					Dynamic:    p.HasDynamic,
+					Context:    c.Context,
+				})
+			}
 			if out := stringFlag(p, "output"); out != "" {
 				ops = append(ops, ir.ResourceOp{
 					Type:       ir.OpFileWrite,
@@ -461,4 +473,49 @@ func init() {
 			return ops
 		},
 	})
+}
+
+func curlFileReadOps(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+	pathsToRead := []string{}
+	for _, value := range stringListFlag(p, "data") {
+		if path, ok := curlAtFilePath(value); ok {
+			pathsToRead = append(pathsToRead, path)
+		}
+	}
+	for _, value := range stringListFlag(p, "form") {
+		if path, ok := curlAtFilePath(value); ok {
+			pathsToRead = append(pathsToRead, path)
+		}
+	}
+	if upload := stringFlag(p, "upload"); upload != "" {
+		pathsToRead = append(pathsToRead, upload)
+	}
+
+	ops := make([]ir.ResourceOp, 0, len(pathsToRead))
+	for _, path := range pathsToRead {
+		if path == "" {
+			continue
+		}
+		ops = append(ops, ir.ResourceOp{
+			Type:       ir.OpFileRead,
+			Paths:      []ir.NormalizedPath{r.ResolveString(path)},
+			Confidence: confOf(c.Simple),
+			Dynamic:    p.HasDynamic,
+			Context:    c.Context,
+		})
+	}
+	return ops
+}
+
+func curlAtFilePath(value string) (string, bool) {
+	if strings.HasPrefix(value, "@") {
+		return strings.TrimPrefix(value, "@"), true
+	}
+	if idx := strings.Index(value, "=@"); idx >= 0 {
+		return value[idx+2:], true
+	}
+	if idx := strings.Index(value, "<"); idx >= 0 && idx+1 < len(value) {
+		return value[idx+1:], true
+	}
+	return "", false
 }
