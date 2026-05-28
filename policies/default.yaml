@@ -1,0 +1,410 @@
+policy:
+  id: "default-ai-shell-policy"
+  name: "Default AI Shell Policy"
+  defaultAction: "ask"
+
+actions:
+  allow:
+    effectiveAction: "allow"
+    severity: 0
+  ask:
+    effectiveAction: "ask"
+    severity: 50
+  deny:
+    effectiveAction: "deny"
+    severity: 100
+  allow_readonly:
+    effectiveAction: "allow"
+    severity: 0
+  ask_network:
+    effectiveAction: "ask"
+    severity: 60
+  ask_sensitive_read:
+    effectiveAction: "ask"
+    severity: 70
+  ask_remote:
+    effectiveAction: "ask"
+    severity: 65
+  ask_container:
+    effectiveAction: "ask"
+    severity: 60
+  ask_workspace_write:
+    effectiveAction: "ask"
+    severity: 55
+  ask_package_manager:
+    effectiveAction: "ask"
+    severity: 60
+  deny_destructive:
+    effectiveAction: "deny"
+    severity: 100
+  deny_secret_exfiltration:
+    effectiveAction: "deny"
+    severity: 100
+  deny_inline_eval:
+    effectiveAction: "deny"
+    severity: 95
+
+rules:
+  # ------------------------------------------------------------------
+  # Phase 1 — Enrichment: tag and risk-score the leaf command.
+  # ------------------------------------------------------------------
+  - id: "mark-secret-path"
+    mode: "enrich"
+    order: 100
+    match:
+      path.secretCandidate:
+        equals: true
+    effects:
+      addTags: ["secret_candidate"]
+      addRisk: 50
+      addAuditNote: "Command touches a secret-like path"
+    terminal: false
+
+  - id: "mark-network-write"
+    mode: "enrich"
+    order: 110
+    match:
+      operation.type:
+        equals: "network_write"
+    effects:
+      addTags: ["uses_network", "network_write"]
+      addRisk: 40
+      addAuditNote: "Command sends data over network"
+    terminal: false
+
+  - id: "mark-network-read"
+    mode: "enrich"
+    order: 111
+    match:
+      operation.type:
+        equals: "network_read"
+    effects:
+      addTags: ["uses_network", "network_read"]
+      addRisk: 20
+    terminal: false
+
+  - id: "mark-remote-command"
+    mode: "enrich"
+    order: 120
+    match:
+      context.inRemoteCommand:
+        equals: true
+    effects:
+      addTags: ["remote_command"]
+      addRisk: 30
+      addAuditNote: "Command is executed on a remote host"
+    terminal: false
+
+  - id: "mark-container-command"
+    mode: "enrich"
+    order: 130
+    match:
+      context.inContainerCommand:
+        equals: true
+    effects:
+      addTags: ["container_command"]
+      addRisk: 20
+      addAuditNote: "Command is executed inside a container"
+    terminal: false
+
+  - id: "mark-privilege-escalation"
+    mode: "enrich"
+    order: 140
+    match:
+      context.privilegeEscalated:
+        equals: true
+    effects:
+      addTags: ["privilege_escalated"]
+      addRisk: 30
+      addAuditNote: "Command runs with elevated privileges (sudo)"
+    terminal: false
+
+  - id: "mark-rm-recursive-force"
+    mode: "enrich"
+    order: 150
+    match:
+      all:
+        - command.program:
+            equals: "rm"
+        - flags.recursive:
+            equals: true
+        - flags.force:
+            equals: true
+    effects:
+      addTags: ["recursive_force_delete"]
+      addRisk: 40
+    terminal: false
+
+  - id: "mark-dynamic-args-on-mutation"
+    mode: "enrich"
+    order: 160
+    match:
+      all:
+        - command.hasDynamicArgs:
+            equals: true
+        - operation.type:
+            in: ["file_delete", "file_write", "file_append", "file_chmod", "file_chown", "file_move"]
+    effects:
+      addTags: ["dynamic_destructive"]
+      addRisk: 50
+      addAuditNote: "Mutating command has dynamic arguments — value not statically known"
+    terminal: false
+
+  # ------------------------------------------------------------------
+  # Phase 2 — Hard denies (highest priority).
+  # ------------------------------------------------------------------
+  - id: "deny-secret-exfiltration"
+    mode: "decide"
+    order: 1000
+    match:
+      all:
+        - tags:
+            contains: "secret_candidate"
+        - tags:
+            contains: "network_write"
+    action: "deny_secret_exfiltration"
+    reason: "Secret-like data may be sent over network"
+    terminal: true
+
+  - id: "deny-rm-system-root"
+    mode: "decide"
+    order: 1010
+    match:
+      all:
+        - command.program:
+            equals: "rm"
+        - flags.recursive:
+            equals: true
+        - path.scope:
+            in: ["system"]
+    action: "deny_destructive"
+    reason: "Recursive removal targeting system path"
+    terminal: true
+
+  - id: "deny-dynamic-recursive-force-rm"
+    mode: "decide"
+    order: 1020
+    match:
+      all:
+        - command.program:
+            equals: "rm"
+        - flags.recursive:
+            equals: true
+        - flags.force:
+            equals: true
+        - command.hasDynamicArgs:
+            equals: true
+    action: "deny_destructive"
+    reason: "rm -rf with dynamic arguments cannot be statically validated"
+    terminal: true
+
+  - id: "deny-chmod-recursive-system"
+    mode: "decide"
+    order: 1030
+    match:
+      all:
+        - command.program:
+            in: ["chmod", "chown"]
+        - flags.recursive:
+            equals: true
+        - path.scope:
+            equals: "system"
+    action: "deny_destructive"
+    reason: "Recursive permission change on system path"
+    terminal: true
+
+  - id: "deny-git-push-force"
+    mode: "decide"
+    order: 1040
+    match:
+      all:
+        - command.program:
+            equals: "git"
+        - command.subcommand:
+            equals: ["git", "push"]
+        - flags.force:
+            equals: true
+    action: "deny_destructive"
+    reason: "git push --force is denied by default"
+    terminal: true
+
+  - id: "deny-git-clean-fdx"
+    mode: "decide"
+    order: 1050
+    match:
+      all:
+        - command.program:
+            equals: "git"
+        - command.subcommand:
+            equals: ["git", "clean"]
+        - flags.forceDirsX:
+            equals: true
+    action: "deny_destructive"
+    reason: "git clean -fdx is denied by default"
+    terminal: true
+
+  - id: "deny-docker-privileged"
+    mode: "decide"
+    order: 1060
+    match:
+      all:
+        - command.wrapperType:
+            equals: "docker_run"
+        - context.privilegeEscalated:
+            equals: false
+    action: "ask"
+    reason: "docker run requires approval"
+    terminal: false
+
+  - id: "deny-inline-eval"
+    mode: "decide"
+    order: 1080
+    match:
+      command.wrapperType:
+        equals: "language_eval"
+    action: "deny_inline_eval"
+    reason: "Inline language evaluation (python/node/perl/ruby -e/-c) is denied by default"
+    terminal: true
+
+  # ------------------------------------------------------------------
+  # Phase 3 — Allow well-known readonly commands inside the workspace.
+  # ------------------------------------------------------------------
+  - id: "allow-bash-readonly"
+    mode: "decide"
+    order: 5000
+    match:
+      all:
+        - command.program:
+            in: ["pwd", "ls", "cat", "head", "tail", "stat", "file", "echo", "printf", "grep", "egrep", "fgrep", "rg"]
+        - operation.type:
+            in: ["file_read", "file_list", "file_read_metadata"]
+        - path.scope:
+            in: ["inside_workspace", "tmp"]
+        - command.hasDynamicArgs:
+            equals: false
+    action: "allow_readonly"
+    terminal: true
+
+  - id: "allow-git-readonly"
+    mode: "decide"
+    order: 5010
+    match:
+      all:
+        - command.program:
+            equals: "git"
+        - operation.type:
+            equals: "git_read"
+    action: "allow_readonly"
+    terminal: true
+
+  - id: "allow-docker-readonly"
+    mode: "decide"
+    order: 5020
+    match:
+      all:
+        - command.program:
+            in: ["docker", "podman"]
+        - operation.type:
+            equals: "container_read"
+    action: "allow_readonly"
+    terminal: true
+
+  # ------------------------------------------------------------------
+  # Phase 4 — Ask for medium-risk operations.
+  # ------------------------------------------------------------------
+  - id: "ask-secret-read"
+    mode: "decide"
+    order: 6000
+    match:
+      all:
+        - tags:
+            contains: "secret_candidate"
+        - operation.type:
+            in: ["file_read", "file_read_metadata"]
+    action: "ask_sensitive_read"
+    reason: "Reading a secret-like file requires approval"
+    terminal: true
+
+  - id: "ask-network-write"
+    mode: "decide"
+    order: 6010
+    match:
+      operation.type:
+        equals: "network_write"
+    action: "ask_network"
+    reason: "Network write requires approval"
+    terminal: true
+
+  - id: "ask-network-read"
+    mode: "decide"
+    order: 6020
+    match:
+      operation.type:
+        equals: "network_read"
+    action: "ask_network"
+    reason: "Network read requires approval"
+    terminal: true
+
+  - id: "ask-remote-command"
+    mode: "decide"
+    order: 6030
+    match:
+      context.inRemoteCommand:
+        equals: true
+    action: "ask_remote"
+    reason: "Remote command requires approval"
+    terminal: true
+
+  - id: "ask-container-exec"
+    mode: "decide"
+    order: 6040
+    match:
+      context.inContainerCommand:
+        equals: true
+    action: "ask_container"
+    reason: "Container command requires approval"
+    terminal: true
+
+  - id: "ask-workspace-write"
+    mode: "decide"
+    order: 6050
+    match:
+      all:
+        - operation.type:
+            in: ["file_write", "file_append", "file_delete", "file_move", "file_chmod", "file_chown"]
+        - path.scope:
+            in: ["inside_workspace", "tmp"]
+    action: "ask_workspace_write"
+    reason: "Workspace mutation requires approval"
+    terminal: true
+
+  # ------------------------------------------------------------------
+  # Phase 5 — Risk-score fallbacks.
+  # ------------------------------------------------------------------
+  - id: "deny-high-risk"
+    mode: "decide"
+    order: 8000
+    match:
+      riskScore:
+        greaterThanOrEqual: 100
+    action: "deny"
+    reason: "Aggregated risk score is too high"
+    terminal: true
+
+  - id: "ask-medium-risk"
+    mode: "decide"
+    order: 8010
+    match:
+      riskScore:
+        greaterThanOrEqual: 40
+    action: "ask"
+    reason: "Aggregated risk score requires approval"
+    terminal: true
+
+  - id: "ask-unknown-default"
+    mode: "decide"
+    order: 9999
+    match: {}
+    action: "ask"
+    reason: "No specific rule matched; default action applied"
+    terminal: true

@@ -1,0 +1,464 @@
+package analyze
+
+import (
+	"github.com/self/shell_permission/internal/argv"
+	"github.com/self/shell_permission/internal/ir"
+	"github.com/self/shell_permission/internal/paths"
+)
+
+func init() {
+	register([]string{"pwd"}, &commandSpec{
+		Argv: argv.Spec{},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileReadMetadata,
+				Confidence: ir.ConfStatic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"ls", "dir"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"all":       {Names: []string{"-a", "--all"}},
+				"long":      {Names: []string{"-l"}},
+				"recursive": {Names: []string{"-R", "--recursive"}},
+				"human":     {Names: []string{"-h", "--human-readable"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			args := p.Positionals
+			if len(args) == 0 {
+				args = []ir.ArgValue{{Raw: ".", Value: ".", Confidence: ir.ConfStatic}}
+			}
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileList,
+				Paths:      pathsFromArgs(args, r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"cat", "head", "tail", "less", "more", "bat"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"follow": {Names: []string{"-f", "--follow"}},
+				"lines":  {Names: []string{"-n", "--lines"}, TakesValue: true},
+				"bytes":  {Names: []string{"-c", "--bytes"}, TakesValue: true},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			if len(p.Positionals) == 0 {
+				return nil
+			}
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileRead,
+				Paths:      pathsFromArgs(p.Positionals, r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"stat", "file"}, &commandSpec{
+		Argv: argv.Spec{},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileReadMetadata,
+				Paths:      pathsFromArgs(p.Positionals, r),
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"echo", "printf"}, &commandSpec{
+		Argv: argv.Spec{},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			// echo writes to stdout. Real file write only happens via
+			// redirection, which the analyzer handles separately.
+			return nil
+		},
+	})
+
+	register([]string{"grep", "egrep", "fgrep", "rg"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"recursive":  {Names: []string{"-r", "-R", "--recursive"}},
+				"ignoreCase": {Names: []string{"-i", "--ignore-case"}},
+				"pattern":    {Names: []string{"-e", "--regexp"}, TakesValue: true, Repeatable: true},
+				"file":       {Names: []string{"-f", "--file"}, TakesValue: true},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			// First positional is pattern unless -e provided; remaining are files.
+			args := p.Positionals
+			if _, ok := p.Flags["pattern"]; !ok && len(args) > 0 {
+				args = args[1:]
+			}
+			if len(args) == 0 {
+				return nil
+			}
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileRead,
+				Paths:      pathsFromArgs(args, r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"rm"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"recursive":   {Names: []string{"-r", "-R", "--recursive"}},
+				"force":       {Names: []string{"-f", "--force"}},
+				"interactive": {Names: []string{"-i", "-I", "--interactive"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileDelete,
+				Paths:      pathsFromArgs(p.Positionals, r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"mkdir"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"parents": {Names: []string{"-p", "--parents"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileWrite,
+				Paths:      pathsFromArgs(p.Positionals, r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"touch"}, &commandSpec{
+		Argv: argv.Spec{},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileWrite,
+				Paths:      pathsFromArgs(p.Positionals, r),
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"cp"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"recursive": {Names: []string{"-r", "-R", "--recursive"}},
+				"force":     {Names: []string{"-f", "--force"}},
+				"preserve":  {Names: []string{"-p", "--preserve"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			args := p.Positionals
+			if len(args) < 2 {
+				return nil
+			}
+			srcs := args[:len(args)-1]
+			dst := args[len(args)-1]
+			return []ir.ResourceOp{
+				{
+					Type:       ir.OpFileRead,
+					Paths:      pathsFromArgs(srcs, r),
+					Confidence: confOf(c.Simple),
+					Dynamic:    p.HasDynamic,
+					Context:    c.Context,
+				},
+				{
+					Type:       ir.OpFileWrite,
+					Paths:      pathsFromArgs([]ir.ArgValue{dst}, r),
+					Confidence: confOf(c.Simple),
+					Dynamic:    p.HasDynamic,
+					Context:    c.Context,
+				},
+			}
+		},
+	})
+
+	register([]string{"mv"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"force": {Names: []string{"-f", "--force"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			args := p.Positionals
+			if len(args) < 2 {
+				return nil
+			}
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileMove,
+				Paths:      pathsFromArgs(args, r),
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"chmod"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"recursive": {Names: []string{"-R", "--recursive"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			if len(p.Positionals) < 2 {
+				return nil
+			}
+			// First positional is mode; rest are paths.
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileChmod,
+				Paths:      pathsFromArgs(p.Positionals[1:], r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"chown"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"recursive": {Names: []string{"-R", "--recursive"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			if len(p.Positionals) < 2 {
+				return nil
+			}
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileChown,
+				Paths:      pathsFromArgs(p.Positionals[1:], r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"ln"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"symbolic": {Names: []string{"-s", "--symbolic"}},
+				"force":    {Names: []string{"-f", "--force"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileWrite,
+				Paths:      pathsFromArgs(p.Positionals, r),
+				Flags:      p.Flags,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"sed"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"inPlace": {Names: []string{"-i", "--in-place"}},
+				"expr":    {Names: []string{"-e", "--expression"}, TakesValue: true, Repeatable: true},
+				"file":    {Names: []string{"-f", "--file"}, TakesValue: true},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			args := p.Positionals
+			if _, hasExpr := p.Flags["expr"]; !hasExpr && len(args) > 0 {
+				args = args[1:]
+			}
+			ops := []ir.ResourceOp{{
+				Type:       ir.OpFileRead,
+				Paths:      pathsFromArgs(args, r),
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+			if boolFlag(p, "inPlace") {
+				ops = append(ops, ir.ResourceOp{
+					Type:       ir.OpFileWrite,
+					Paths:      pathsFromArgs(args, r),
+					Confidence: confOf(c.Simple),
+					Dynamic:    p.HasDynamic,
+					Context:    c.Context,
+				})
+			}
+			return ops
+		},
+	})
+
+	register([]string{"awk"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"file": {Names: []string{"-f"}, TakesValue: true},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			args := p.Positionals
+			if _, hasF := p.Flags["file"]; !hasF && len(args) > 0 {
+				args = args[1:]
+			}
+			if len(args) == 0 {
+				return nil
+			}
+			return []ir.ResourceOp{{
+				Type:       ir.OpFileRead,
+				Paths:      pathsFromArgs(args, r),
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+		},
+	})
+
+	register([]string{"tar"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"create":  {Names: []string{"-c", "--create"}},
+				"extract": {Names: []string{"-x", "--extract"}},
+				"list":    {Names: []string{"-t", "--list"}},
+				"file":    {Names: []string{"-f", "--file"}, TakesValue: true},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			ops := []ir.ResourceOp{}
+			if boolFlag(p, "extract") || boolFlag(p, "create") {
+				ops = append(ops, ir.ResourceOp{
+					Type:       ir.OpFileWrite,
+					Paths:      pathsFromArgs(p.Positionals, r),
+					Confidence: confOf(c.Simple),
+					Dynamic:    p.HasDynamic,
+					Context:    c.Context,
+				})
+			} else {
+				ops = append(ops, ir.ResourceOp{
+					Type:       ir.OpFileRead,
+					Paths:      pathsFromArgs(p.Positionals, r),
+					Confidence: confOf(c.Simple),
+					Dynamic:    p.HasDynamic,
+					Context:    c.Context,
+				})
+			}
+			return ops
+		},
+	})
+
+	// Network tools: curl, wget. Method flags decide read vs write.
+	register([]string{"curl"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"data":     {Names: []string{"-d", "--data", "--data-binary", "--data-raw", "--data-urlencode"}, TakesValue: true, Repeatable: true},
+				"form":     {Names: []string{"-F", "--form"}, TakesValue: true, Repeatable: true},
+				"upload":   {Names: []string{"-T", "--upload-file"}, TakesValue: true},
+				"output":   {Names: []string{"-o", "--output"}, TakesValue: true},
+				"request":  {Names: []string{"-X", "--request"}, TakesValue: true},
+				"header":   {Names: []string{"-H", "--header"}, TakesValue: true, Repeatable: true},
+				"silent":   {Names: []string{"-s", "--silent"}},
+				"insecure": {Names: []string{"-k", "--insecure"}},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			method := stringFlag(p, "request")
+			isWrite := boolFlag(p, "data") || boolFlag(p, "form") || boolFlag(p, "upload") ||
+				method == "POST" || method == "PUT" || method == "PATCH" || method == "DELETE"
+			target := ""
+			for _, pos := range p.Positionals {
+				if pos.Confidence == ir.ConfStatic {
+					target = pos.Value
+					break
+				}
+			}
+			opType := ir.OpNetworkRead
+			if isWrite {
+				opType = ir.OpNetworkWrite
+			}
+			ops := []ir.ResourceOp{{
+				Type:       opType,
+				Target:     target,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+			if out := stringFlag(p, "output"); out != "" {
+				ops = append(ops, ir.ResourceOp{
+					Type:       ir.OpFileWrite,
+					Paths:      []ir.NormalizedPath{r.ResolveString(out)},
+					Confidence: confOf(c.Simple),
+					Context:    c.Context,
+				})
+			}
+			return ops
+		},
+	})
+
+	register([]string{"wget"}, &commandSpec{
+		Argv: argv.Spec{
+			Flags: map[string]argv.FlagSpec{
+				"output":  {Names: []string{"-O", "--output-document"}, TakesValue: true},
+				"recurse": {Names: []string{"-r", "--recursive"}},
+				"post":    {Names: []string{"--post-data", "--post-file"}, TakesValue: true},
+			},
+		},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			isWrite := boolFlag(p, "post")
+			opType := ir.OpNetworkRead
+			if isWrite {
+				opType = ir.OpNetworkWrite
+			}
+			target := ""
+			for _, pos := range p.Positionals {
+				if pos.Confidence == ir.ConfStatic {
+					target = pos.Value
+					break
+				}
+			}
+			ops := []ir.ResourceOp{{
+				Type:       opType,
+				Target:     target,
+				Confidence: confOf(c.Simple),
+				Dynamic:    p.HasDynamic,
+				Context:    c.Context,
+			}}
+			if out := stringFlag(p, "output"); out != "" {
+				ops = append(ops, ir.ResourceOp{
+					Type:       ir.OpFileWrite,
+					Paths:      []ir.NormalizedPath{r.ResolveString(out)},
+					Confidence: confOf(c.Simple),
+					Context:    c.Context,
+				})
+			}
+			return ops
+		},
+	})
+}
