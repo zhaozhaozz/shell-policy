@@ -1,0 +1,14 @@
+# Build artifacts
+/bin/
+*.exe
+
+# Audit / log outputs
+*.log
+*.jsonl
+
+# Editor / OS noise
+.DS_Store
+*.swp
+
+# Stray debug output
+output.txt
