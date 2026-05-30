@@ -26,7 +26,11 @@ func Load(data []byte) (*Policy, error) {
 		ID:            raw.Policy.ID,
 		Name:          raw.Policy.Name,
 		DefaultAction: raw.Policy.DefaultAction,
+		WritableDirs:  raw.Policy.WritableDirs,
 		Actions:       map[string]*Action{},
+	}
+	if len(p.WritableDirs) == 0 {
+		p.WritableDirs = raw.WritableDirs
 	}
 	if p.ID == "" {
 		// Allow flat layout where actions/rules sit at top level.
@@ -59,13 +63,15 @@ func Load(data []byte) (*Policy, error) {
 
 type rawPolicyDoc struct {
 	Policy struct {
-		ID            string `yaml:"id"`
-		Name          string `yaml:"name"`
-		DefaultAction string `yaml:"defaultAction"`
+		ID            string   `yaml:"id"`
+		Name          string   `yaml:"name"`
+		DefaultAction string   `yaml:"defaultAction"`
+		WritableDirs  []string `yaml:"writableDirs"`
 	} `yaml:"policy"`
 	ID            string             `yaml:"id"`
 	Name          string             `yaml:"name"`
 	DefaultAction string             `yaml:"defaultAction"`
+	WritableDirs  []string           `yaml:"writableDirs"`
 	Actions       map[string]*Action `yaml:"actions"`
 	Rules         []Rule             `yaml:"rules"`
 }

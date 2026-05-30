@@ -19,6 +19,11 @@ type Resolver struct {
 	Cwd            string
 	WorkspaceRoots []string
 	Home           string
+	// WritableRoots is an explicit allowlist of directories the operator
+	// considers safe to modify. Paths that fall inside one of these roots
+	// get NormalizedPath.Writable = true so policy rules can auto-allow
+	// ordinary mutations there.
+	WritableRoots []string
 }
 
 // secretPatterns is the built-in list of paths considered secret-like.
@@ -68,6 +73,19 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 	if containsGlob(raw) {
 		np.Kind = ir.PathGlob
 		np.Scope = ir.ScopeUnknown
+		// A glob still has a (usually) static directory prefix, e.g.
+		// "/var/log/*" or "build/**". Classify the scope from that prefix
+		// so that dangerous globs over system paths are not silently
+		// downgraded to "unknown". The expanded set is unknown, but the
+		// directory being operated on is known.
+		if prefix := globStaticPrefix(raw, r); prefix != "" {
+			np.Scope = r.classifyScope(prefix)
+			np.Writable = r.isWritable(prefix)
+		}
+		np.SecretCandidate = isSecretPath(raw)
+		if np.SecretCandidate {
+			np.Scope = ir.ScopeSecretCandidate
+		}
 		return np
 	}
 
@@ -100,12 +118,31 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 	}
 
 	np.Scope = r.classifyScope(np.Absolute)
+	np.Writable = r.isWritable(np.Absolute)
 	np.SecretCandidate = isSecretPath(np.Absolute) || isSecretPath(raw)
 	if np.SecretCandidate {
 		// Secret scope wins over generic scopes for downstream rules.
 		np.Scope = ir.ScopeSecretCandidate
 	}
 	return np
+}
+
+// isWritable reports whether abs lies within one of the configured
+// writable roots. An empty allowlist means nothing is auto-writable.
+func (r *Resolver) isWritable(abs string) bool {
+	if abs == "" {
+		return false
+	}
+	for _, root := range r.WritableRoots {
+		if root == "" {
+			continue
+		}
+		root = filepath.Clean(root)
+		if abs == root || strings.HasPrefix(abs, root+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
 }
 
 // ResolveString is a convenience wrapper for callers that have only a
@@ -167,6 +204,47 @@ func containsGlob(s string) bool {
 		return true
 	}
 	return false
+}
+
+// globStaticPrefix returns the absolute directory prefix of a glob path,
+// i.e. the longest leading run of path segments that contain no glob
+// metacharacters. For "/var/log/*.log" it returns "/var/log"; for
+// "build/**" with cwd "/repo" it returns "/repo/build". Returns "" when
+// no static prefix can be determined.
+func globStaticPrefix(raw string, r *Resolver) string {
+	// Strip a leading ~/ so the prefix can still be anchored to HOME.
+	homePrefixed := strings.HasPrefix(raw, "~/") || raw == "~"
+	cleaned := raw
+	if homePrefixed && r.Home != "" {
+		cleaned = filepath.Join(r.Home, strings.TrimPrefix(raw, "~"))
+	}
+	segs := strings.Split(cleaned, "/")
+	var static []string
+	for _, seg := range segs {
+		if containsGlob(seg) {
+			break
+		}
+		static = append(static, seg)
+	}
+	prefix := strings.Join(static, "/")
+	if prefix == "" {
+		// Leading segment was itself a glob (e.g. "*.log"); anchor to cwd.
+		if filepath.IsAbs(cleaned) {
+			return ""
+		}
+		if r.Cwd != "" {
+			return filepath.Clean(r.Cwd)
+		}
+		return ""
+	}
+	if filepath.IsAbs(cleaned) {
+		return filepath.Clean(prefix)
+	}
+	base := r.Cwd
+	if base == "" {
+		base = "."
+	}
+	return filepath.Clean(filepath.Join(base, prefix))
 }
 
 func isSecretPath(p string) bool {

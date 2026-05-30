@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/self/shell_permission/internal/analyze"
+	"github.com/self/shell_permission/internal/audit"
 	"github.com/self/shell_permission/internal/parser"
 	"github.com/self/shell_permission/internal/paths"
 	"github.com/self/shell_permission/internal/policy"
@@ -66,8 +67,14 @@ Common flags:
   --policy <file>          Path to policy YAML (default: policies/default.yaml).
   --cwd <path>             Working directory for path normalization (default: $PWD).
   --workspace <path>       Workspace root (repeatable). Default: cwd.
+  --writable <path>        Writable directory root (repeatable). Ordinary
+                           mutations inside these dirs can be auto-allowed.
   --home <path>            HOME for ~/ expansion (default: $HOME).
   --json                   Emit JSON output.
+  --log-level <level>      Diagnostic log level: debug|info|warn|error|off
+                           (default: off). Written to stderr.
+  --audit <file>           Append a JSONL audit record per evaluated command.
+                           Use "-" for stderr. (eval/explain only)
 
 Exit codes:
   0  allow      10 ask     20 deny     30 parse error    40 policy error
@@ -78,8 +85,11 @@ type commonFlags struct {
 	policyPath string
 	cwd        string
 	workspace  multiFlag
+	writable   multiFlag
 	home       string
 	jsonOut    bool
+	logLevel   string
+	auditPath  string
 }
 
 func setupCommon(fs *flag.FlagSet) *commonFlags {
@@ -87,8 +97,11 @@ func setupCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&cf.policyPath, "policy", "", "policy YAML file")
 	fs.StringVar(&cf.cwd, "cwd", "", "working directory")
 	fs.Var(&cf.workspace, "workspace", "workspace root (repeatable)")
+	fs.Var(&cf.writable, "writable", "writable directory root (repeatable)")
 	fs.StringVar(&cf.home, "home", "", "home directory")
 	fs.BoolVar(&cf.jsonOut, "json", false, "emit JSON")
+	fs.StringVar(&cf.logLevel, "log-level", "off", "diagnostic log level: debug|info|warn|error|off")
+	fs.StringVar(&cf.auditPath, "audit", "", "append JSONL audit records to this file (- for stderr)")
 	return cf
 }
 
@@ -105,7 +118,7 @@ func (cf *commonFlags) resolver() *paths.Resolver {
 	if len(roots) == 0 {
 		roots = []string{cwd}
 	}
-	return &paths.Resolver{Cwd: cwd, WorkspaceRoots: roots, Home: home}
+	return &paths.Resolver{Cwd: cwd, WorkspaceRoots: roots, Home: home, WritableRoots: append([]string(nil), cf.writable...)}
 }
 
 func (cf *commonFlags) loadPolicy() (*policy.Policy, error) {
@@ -208,7 +221,11 @@ func cmdEval(args []string, explain bool) int {
 		fmt.Fprintln(os.Stderr, "policy error:", err)
 		return 40
 	}
-	pr, err := analyze.AnalyzeText(cmd, cf.resolver())
+	rsv := cf.resolver()
+	// Writable dirs declared in the policy supplement those passed on the
+	// command line, so an operator can ship the allowlist with the policy.
+	rsv.WritableRoots = append(rsv.WritableRoots, pol.WritableDirs...)
+	pr, err := analyze.AnalyzeText(cmd, rsv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "parse error:", err)
 		emitDecision(&policy.Result{
@@ -218,14 +235,61 @@ func cmdEval(args []string, explain bool) int {
 		}, cf.jsonOut, explain, nil)
 		return 30
 	}
-	eng := policy.New(pol)
+	eng := policy.New(pol).WithLogger(audit.NewLogger(os.Stderr, cf.logLevel))
 	res, err := eng.Evaluate(pr.Command)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "policy error:", err)
 		return 40
 	}
+	if aw, closeFn, err := cf.auditWriter(); err != nil {
+		fmt.Fprintln(os.Stderr, "audit error:", err)
+	} else if aw != nil {
+		_ = aw.Write(auditRecordFor(cmd, rsv, res))
+		if closeFn != nil {
+			closeFn()
+		}
+	}
 	emitDecision(res, cf.jsonOut, explain, pr)
 	return exitCodeFor(res.EffectiveDecision)
+}
+
+// auditWriter opens the audit sink selected by --audit. It returns a nil
+// writer when auditing is disabled. The returned close function (if any)
+// must be called to flush a file sink.
+func (cf *commonFlags) auditWriter() (*audit.Writer, func(), error) {
+	switch cf.auditPath {
+	case "":
+		return nil, nil, nil
+	case "-":
+		return audit.NewWriter(os.Stderr), nil, nil
+	default:
+		f, err := os.OpenFile(cf.auditPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return nil, nil, err
+		}
+		return audit.NewWriter(f), func() { _ = f.Close() }, nil
+	}
+}
+
+// auditRecordFor projects a policy.Result into an audit.Record.
+func auditRecordFor(cmd string, rsv *paths.Resolver, res *policy.Result) audit.Record {
+	rec := audit.Record{
+		Command:           cmd,
+		Cwd:               rsv.Cwd,
+		Decision:          res.Decision,
+		EffectiveDecision: string(res.EffectiveDecision),
+		Reason:            res.Reason,
+		RiskScore:         res.RiskScore,
+		Tags:              res.Tags,
+		AuditNotes:        res.AuditNotes,
+	}
+	if len(rsv.WorkspaceRoots) > 0 {
+		rec.Workspace = rsv.WorkspaceRoots[0]
+	}
+	for _, mr := range res.MatchedRules {
+		rec.MatchedRules = append(rec.MatchedRules, mr.RuleID)
+	}
+	return rec
 }
 
 func exitCodeFor(e policy.EffectiveAction) int {

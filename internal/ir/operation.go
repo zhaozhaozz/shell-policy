@@ -62,13 +62,16 @@ const (
 
 // NormalizedPath is the canonical, classified form of a path argument.
 type NormalizedPath struct {
-	Raw             string     `json:"raw"`
-	Normalized      string     `json:"normalized,omitempty"`
-	Absolute        string     `json:"absolute,omitempty"`
-	Kind            PathKind   `json:"kind"`
-	Scope           PathScope  `json:"scope"`
-	SecretCandidate bool       `json:"secretCandidate,omitempty"`
-	Confidence      Confidence `json:"confidence"`
+	Raw             string    `json:"raw"`
+	Normalized      string    `json:"normalized,omitempty"`
+	Absolute        string    `json:"absolute,omitempty"`
+	Kind            PathKind  `json:"kind"`
+	Scope           PathScope `json:"scope"`
+	SecretCandidate bool      `json:"secretCandidate,omitempty"`
+	// Writable is true when the path falls inside one of the resolver's
+	// configured writable roots (an operator-managed allowlist).
+	Writable   bool       `json:"writable,omitempty"`
+	Confidence Confidence `json:"confidence"`
 }
 
 // ResourceOp is a single resource operation produced by a command spec.

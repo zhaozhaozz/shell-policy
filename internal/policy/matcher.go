@@ -234,6 +234,22 @@ func lookupField(field string, ctx *matchCtx) (any, bool) {
 			}
 			return false, true
 		}
+	case field == "path.writable":
+		// True only when the operation has at least one path and every
+		// path falls inside a configured writable root. This keeps
+		// auto-allow conservative: a mix of writable and non-writable
+		// targets does not qualify.
+		if ctx.op != nil {
+			if len(ctx.op.Paths) == 0 {
+				return false, true
+			}
+			for _, p := range ctx.op.Paths {
+				if !p.Writable {
+					return false, true
+				}
+			}
+			return true, true
+		}
 	case field == "path.normalizedRegex" || field == "path.rawRegex":
 		// Handled inside applyOp via a marker-only return.
 		return field, true

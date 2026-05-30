@@ -2,19 +2,35 @@ package policy
 
 import (
 	"fmt"
+	"log/slog"
 
+	"github.com/self/shell_permission/internal/audit"
 	"github.com/self/shell_permission/internal/ir"
 )
 
 // Engine runs a Policy against an IR command tree.
 type Engine struct {
 	Policy *Policy
+	// Logger receives leveled diagnostics about the evaluation process
+	// (rule matches, final decision). It is never nil; New defaults it to
+	// a discard logger so call sites need no nil checks.
+	Logger *slog.Logger
 }
 
 // New creates an Engine. The policy must already be valid (call
 // policy.Validate beforehand if desired).
 func New(p *Policy) *Engine {
-	return &Engine{Policy: p}
+	return &Engine{Policy: p, Logger: audit.Discard()}
+}
+
+// WithLogger sets the diagnostic logger and returns the engine for
+// chaining. A nil logger is replaced with a discard logger.
+func (e *Engine) WithLogger(l *slog.Logger) *Engine {
+	if l == nil {
+		l = audit.Discard()
+	}
+	e.Logger = l
+	return e
 }
 
 // Evaluate runs the policy and aggregates per-leaf decisions into a
@@ -39,7 +55,7 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 		res.PerLeaf = append(res.PerLeaf, *le)
 		res.MatchedRules = append(res.MatchedRules, le.MatchedRules...)
 		res.Tags = mergeUnique(res.Tags, le.Tags)
-		res.AuditNotes = append(res.AuditNotes, le.AuditNotes...)
+		res.AuditNotes = mergeUnique(res.AuditNotes, le.AuditNotes)
 		if le.RiskScore > res.RiskScore {
 			res.RiskScore = le.RiskScore
 		}
@@ -106,6 +122,11 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 		res.EffectiveDecision = e.effective(def)
 		res.Reason = "no rule matched; default action applied"
 	}
+	if e.Logger != nil {
+		e.Logger.Info("decision",
+			"decision", res.Decision, "effective", string(res.EffectiveDecision),
+			"risk", res.RiskScore, "leaves", len(leaves), "tags", res.Tags)
+	}
 	return res, nil
 }
 
@@ -161,6 +182,11 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 			}
 		}
 		le.MatchedRules = append(le.MatchedRules, mr)
+		if e.Logger != nil {
+			e.Logger.Debug("rule matched",
+				"rule", r.ID, "mode", string(r.Mode), "action", r.Action,
+				"terminal", r.IsTerminal(), "risk", le.RiskScore)
+		}
 		if r.IsTerminal() {
 			break
 		}

@@ -2,6 +2,16 @@ policy:
   id: "default-ai-shell-policy"
   name: "Default AI Shell Policy"
   defaultAction: "ask"
+  # writableDirs is an operator-managed allowlist. Ordinary modifications
+  # (write / append / delete / move / copy / mkdir / touch ...) whose targets
+  # all fall inside one of these directories are auto-allowed by the
+  # "allow-writable-dir-mutation" rule below. Leave empty to disable, or
+  # supplement at runtime with the CLI `--writable <dir>` flag.
+  # Example:
+  #   writableDirs:
+  #     - "/home/me/project/build"
+  #     - "/home/me/project/.cache"
+  writableDirs: []
 
 actions:
   allow:
@@ -269,6 +279,29 @@ rules:
   # ------------------------------------------------------------------
   # Phase 3 — Allow well-known readonly commands inside the workspace.
   # ------------------------------------------------------------------
+  - id: "allow-writable-dir-mutation"
+    mode: "decide"
+    order: 4900
+    match:
+      all:
+        - operation.type:
+            in: ["file_write", "file_append", "file_delete", "file_move", "file_copy", "file_chmod", "file_chown"]
+        - path.writable:
+            equals: true
+        - path.secretCandidate:
+            equals: false
+        - command.hasDynamicArgs:
+            equals: false
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
+    action: "allow"
+    reason: "Ordinary modification inside a configured writable directory"
+    terminal: true
+
   - id: "allow-bash-readonly"
     mode: "decide"
     order: 5000

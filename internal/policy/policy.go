@@ -86,11 +86,15 @@ func (r *Rule) IsTerminal() bool {
 
 // Policy is the top-level container.
 type Policy struct {
-	ID            string             `json:"id" yaml:"id"`
-	Name          string             `json:"name,omitempty" yaml:"name,omitempty"`
-	DefaultAction string             `json:"defaultAction,omitempty" yaml:"defaultAction,omitempty"`
-	Actions       map[string]*Action `json:"actions" yaml:"actions"`
-	Rules         []*Rule            `json:"rules" yaml:"rules"`
+	ID            string `json:"id" yaml:"id"`
+	Name          string `json:"name,omitempty" yaml:"name,omitempty"`
+	DefaultAction string `json:"defaultAction,omitempty" yaml:"defaultAction,omitempty"`
+	// WritableDirs is an operator-managed allowlist of directories whose
+	// ordinary mutations may be auto-allowed by rules matching
+	// path.writable. The CLI feeds these into the path resolver.
+	WritableDirs []string           `json:"writableDirs,omitempty" yaml:"writableDirs,omitempty"`
+	Actions      map[string]*Action `json:"actions" yaml:"actions"`
+	Rules        []*Rule            `json:"rules" yaml:"rules"`
 }
 
 // EnsureSorted sorts rules by Order ascending while keeping declared
@@ -188,12 +192,12 @@ type CandidateAction struct {
 
 // LeafEvaluation holds the per-leaf state and outcome.
 type LeafEvaluation struct {
-	Command       *ir.Command       `json:"-"`
-	Tags          []string          `json:"tags,omitempty"`
-	RiskScore     int               `json:"riskScore"`
-	AuditNotes    []string          `json:"auditNotes,omitempty"`
-	MatchedRules  []MatchedRule     `json:"matchedRules,omitempty"`
-	Decision      *CandidateAction  `json:"decision,omitempty"`
+	Command      *ir.Command      `json:"-"`
+	Tags         []string         `json:"tags,omitempty"`
+	RiskScore    int              `json:"riskScore"`
+	AuditNotes   []string         `json:"auditNotes,omitempty"`
+	MatchedRules []MatchedRule    `json:"matchedRules,omitempty"`
+	Decision     *CandidateAction `json:"decision,omitempty"`
 }
 
 // Result is the aggregated outcome for a whole command tree.
