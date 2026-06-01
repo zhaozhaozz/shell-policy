@@ -70,6 +70,79 @@ go build -o bin/shell-policy ./cmd/shell-policy
 | `analyze` | parse + wrapper 检测 + 资源操作抽取 + 路径规范化。 |
 | `eval` | 对命令评估策略，退出码反映决策。 |
 | `explain` | 同 `eval`，额外输出逐 leaf 的规则 trace。 |
+| `claude-hook` | 作为 Claude Code `PreToolUse` hook 运行：从 stdin 读取 hook JSON，向 stdout 输出权限决策。 |
+
+## 在 Claude Code 中作为权限审核 hook
+
+`claude-hook` 子命令把本引擎接到 [Claude Code 的 `PreToolUse` hook](https://docs.anthropic.com/en/docs/claude-code/hooks)
+上，对 Agent 即将执行的 `Bash` 命令做规则审核。协议适配层在
+[internal/claudehook](internal/claudehook/claudehook.go)，刻意与
+`policy` / `analyze` 解耦：它只认 Claude Code 的输入输出格式和一个
+与引擎无关的 `Decision` 类型，由 CLI 胶水层负责调用策略引擎并把
+`policy.Result` 翻译成 `Decision`。
+
+### 协议
+
+- **输入**（stdin）：Claude Code 发来的 hook JSON，关键字段是
+  `tool_name` 和 `tool_input.command`，可选 `cwd`、`session_id`。
+- **输出**（stdout）：
+
+  ```json
+  {
+    "hookSpecificOutput": {
+      "hookEventName": "PreToolUse",
+      "permissionDecision": "allow | deny | ask",
+      "permissionDecisionReason": "[shell-policy] deny (rule: ...): ..."
+    }
+  }
+  ```
+
+决策映射：引擎的 `allow / ask / deny` 直接对应 Claude Code 的
+`allow / ask / deny`。设计上**失败一律降级为 `ask`** 而非放行：
+
+| 情况 | 行为 |
+| --- | --- |
+| `tool_name` 不是 `Bash` | 不输出任何内容，退出 0，交还 Claude Code 默认流程 |
+| 命令为空 | 同上，不干预 |
+| 解析失败 / 策略加载失败 / 评估出错 | 输出 `ask`，附带错误原因 |
+| 正常评估 | 输出引擎决策 |
+
+`claude-hook` 在已输出决策时**始终退出 0**：Claude Code 通过 stdout 的 JSON
+读取决策，非零退出码会被当成 hook 执行失败。
+
+### 配置示例
+
+在 `~/.claude/settings.json`（或项目级 `.claude/settings.json`）里注册：
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/bin/shell-policy claude-hook --policy /path/to/policies/default.yaml --writable \"$CLAUDE_PROJECT_DIR/build\""
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+`claude-hook` 复用所有公共 flag（`--policy` / `--workspace` / `--writable` /
+`--home` / `--log-level` / `--audit`）。未显式传 `--cwd` 时，会采用 hook
+输入里的 `cwd` 做路径规范化。加上 `--audit <file>` 可把每次决策（含
+`session_id`）追加为一行 JSONL 审计记录。
+
+可先用管道在命令行手动验证：
+
+```bash
+echo '{"tool_name":"Bash","cwd":"'"$PWD"'","tool_input":{"command":"rm -rf /etc"}}' \
+  | ./bin/shell-policy claude-hook
+```
 
 ## 规则链与策略配置
 

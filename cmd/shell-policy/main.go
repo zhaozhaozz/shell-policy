@@ -25,6 +25,7 @@ import (
 
 	"github.com/self/shell_permission/internal/analyze"
 	"github.com/self/shell_permission/internal/audit"
+	"github.com/self/shell_permission/internal/claudehook"
 	"github.com/self/shell_permission/internal/parser"
 	"github.com/self/shell_permission/internal/paths"
 	"github.com/self/shell_permission/internal/policy"
@@ -44,6 +45,8 @@ func main() {
 		os.Exit(cmdEval(os.Args[2:], false))
 	case "explain":
 		os.Exit(cmdEval(os.Args[2:], true))
+	case "claude-hook":
+		os.Exit(cmdClaudeHook(os.Args[2:]))
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		return
@@ -62,6 +65,8 @@ Commands:
   analyze   Parse, run wrapper detection and resource-op extraction.
   eval      Evaluate a policy against the command. Exit code reflects decision.
   explain   Like eval but emits the full per-leaf rule trace.
+  claude-hook  Act as a Claude Code PreToolUse hook: read the hook JSON on
+               stdin and emit a permission decision on stdout.
 
 Common flags:
   --policy <file>          Path to policy YAML (default: policies/default.yaml).
@@ -251,6 +256,93 @@ func cmdEval(args []string, explain bool) int {
 	}
 	emitDecision(res, cf.jsonOut, explain, pr)
 	return exitCodeFor(res.EffectiveDecision)
+}
+
+// cmdClaudeHook acts as a Claude Code PreToolUse hook. It reads the hook
+// payload from stdin, evaluates the Bash command against the policy, and
+// writes a permission decision to stdout. Non-Bash tool calls and empty
+// commands produce no output so Claude Code keeps its normal flow.
+//
+// The hook always exits 0 when it emits a JSON verdict: Claude Code reads
+// the decision from stdout regardless of exit code, and a non-zero exit
+// would instead be interpreted as a hook execution failure.
+func cmdClaudeHook(args []string) int {
+	fs := flag.NewFlagSet("claude-hook", flag.ContinueOnError)
+	cf := setupCommon(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	in, err := claudehook.ParseInput(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "claude-hook: invalid input:", err)
+		return 2
+	}
+	command, ok := in.BashCommand()
+	if !ok {
+		// Not a Bash command (or empty): do not interfere.
+		return 0
+	}
+	// Prefer the cwd Claude Code reports unless the operator overrode it.
+	if cf.cwd == "" {
+		cf.cwd = in.Cwd
+	}
+
+	// Fail safe: any setup/parse/policy error asks the user rather than
+	// silently allowing a command we could not fully evaluate.
+	pol, err := cf.loadPolicy()
+	if err != nil {
+		return emitHookDecision(claudehook.Decision{
+			Effective: claudehook.DecisionAsk,
+			Reason:    "policy load error: " + err.Error(),
+		})
+	}
+	rsv := cf.resolver()
+	rsv.WritableRoots = append(rsv.WritableRoots, pol.WritableDirs...)
+	pr, err := analyze.AnalyzeText(command, rsv)
+	if err != nil {
+		return emitHookDecision(claudehook.Decision{
+			Effective: claudehook.DecisionAsk,
+			Reason:    "parse error: " + err.Error(),
+		})
+	}
+	eng := policy.New(pol).WithLogger(audit.NewLogger(os.Stderr, cf.logLevel))
+	res, err := eng.Evaluate(pr.Command)
+	if err != nil {
+		return emitHookDecision(claudehook.Decision{
+			Effective: claudehook.DecisionAsk,
+			Reason:    "policy error: " + err.Error(),
+		})
+	}
+
+	if aw, closeFn, err := cf.auditWriter(); err != nil {
+		fmt.Fprintln(os.Stderr, "audit error:", err)
+	} else if aw != nil {
+		rec := auditRecordFor(command, rsv, res)
+		rec.Session = in.SessionID
+		_ = aw.Write(rec)
+		if closeFn != nil {
+			closeFn()
+		}
+	}
+
+	return emitHookDecision(claudehook.Decision{
+		Effective: string(res.EffectiveDecision),
+		Reason:    res.Reason,
+		Rule:      res.Decision,
+		RiskScore: res.RiskScore,
+		Tags:      res.Tags,
+	})
+}
+
+// emitHookDecision writes a Claude Code permission verdict to stdout and
+// returns the process exit code (always 0 for a delivered verdict).
+func emitHookDecision(d claudehook.Decision) int {
+	if err := claudehook.WriteOutput(os.Stdout, claudehook.BuildOutput(d)); err != nil {
+		fmt.Fprintln(os.Stderr, "claude-hook: write output:", err)
+		return 1
+	}
+	return 0
 }
 
 // auditWriter opens the audit sink selected by --audit. It returns a nil
