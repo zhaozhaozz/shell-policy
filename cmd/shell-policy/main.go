@@ -4,6 +4,8 @@
 //	analyze  -- run parser + analyzer and dump operations
 //	eval     -- run a policy against a command and print the decision
 //	explain  -- like eval but verbose, includes the rule trace
+//	claude-hook -- act as a Claude Code PreToolUse hook
+//	codex-hook -- act as a Codex CLI PermissionRequest hook
 //
 // Exit codes match the design in plan.md:
 //
@@ -25,7 +27,8 @@ import (
 
 	"github.com/self/shell_permission/internal/analyze"
 	"github.com/self/shell_permission/internal/audit"
-	"github.com/self/shell_permission/internal/claudehook"
+	"github.com/self/shell_permission/internal/hooks/claudehook"
+	"github.com/self/shell_permission/internal/hooks/codexhook"
 	"github.com/self/shell_permission/internal/parser"
 	"github.com/self/shell_permission/internal/paths"
 	"github.com/self/shell_permission/internal/policy"
@@ -47,6 +50,8 @@ func main() {
 		os.Exit(cmdEval(os.Args[2:], true))
 	case "claude-hook":
 		os.Exit(cmdClaudeHook(os.Args[2:]))
+	case "codex-hook":
+		os.Exit(cmdCodexHook(os.Args[2:]))
 	case "-h", "--help", "help":
 		printUsage(os.Stdout)
 		return
@@ -67,6 +72,8 @@ Commands:
   explain   Like eval but emits the full per-leaf rule trace.
   claude-hook  Act as a Claude Code PreToolUse hook: read the hook JSON on
                stdin and emit a permission decision on stdout.
+  codex-hook   Act as a Codex CLI PermissionRequest hook: read the hook JSON
+               on stdin and emit an allow/deny decision on stdout.
 
 Common flags:
   --policy <file>          Path to policy YAML (default: policies/default.yaml).
@@ -79,7 +86,7 @@ Common flags:
   --log-level <level>      Diagnostic log level: debug|info|warn|error|off
                            (default: off). Written to stderr.
   --audit <file>           Append a JSONL audit record per evaluated command.
-                           Use "-" for stderr. (eval/explain only)
+                           Use "-" for stderr.
 
 Exit codes:
   0  allow      10 ask     20 deny     30 parse error    40 policy error
@@ -340,6 +347,92 @@ func cmdClaudeHook(args []string) int {
 func emitHookDecision(d claudehook.Decision) int {
 	if err := claudehook.WriteOutput(os.Stdout, claudehook.BuildOutput(d)); err != nil {
 		fmt.Fprintln(os.Stderr, "claude-hook: write output:", err)
+		return 1
+	}
+	return 0
+}
+
+// cmdCodexHook acts as a Codex CLI PermissionRequest hook. It reads the hook
+// payload from stdin, evaluates the Bash command against the policy, and writes
+// a PermissionRequest decision to stdout.
+//
+// Codex PermissionRequest supports allow/deny but not ask. A policy ask (or a
+// non-Bash/empty request) emits no decision so Codex continues its normal
+// approval flow. Setup, parse, and policy errors also decline to decide rather
+// than approving a command we could not fully evaluate.
+func cmdCodexHook(args []string) int {
+	fs := flag.NewFlagSet("codex-hook", flag.ContinueOnError)
+	cf := setupCommon(fs)
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	in, err := codexhook.ParseInput(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "codex-hook: invalid input:", err)
+		return 2
+	}
+	command, ok := in.BashCommand()
+	if !ok {
+		// Not a shell command (or empty): do not interfere.
+		return 0
+	}
+	// Prefer the cwd Codex reports unless the operator overrode it.
+	if cf.cwd == "" {
+		cf.cwd = in.Cwd
+	}
+
+	pol, err := cf.loadPolicy()
+	if err != nil {
+		return emitCodexHookNoDecision("policy load error: " + err.Error())
+	}
+	rsv := cf.resolver()
+	rsv.WritableRoots = append(rsv.WritableRoots, pol.WritableDirs...)
+	pr, err := analyze.AnalyzeText(command, rsv)
+	if err != nil {
+		return emitCodexHookNoDecision("parse error: " + err.Error())
+	}
+	eng := policy.New(pol).WithLogger(audit.NewLogger(os.Stderr, cf.logLevel))
+	res, err := eng.Evaluate(pr.Command)
+	if err != nil {
+		return emitCodexHookNoDecision("policy error: " + err.Error())
+	}
+
+	if aw, closeFn, err := cf.auditWriter(); err != nil {
+		fmt.Fprintln(os.Stderr, "audit error:", err)
+	} else if aw != nil {
+		rec := auditRecordFor(command, rsv, res)
+		rec.Session = in.SessionID
+		_ = aw.Write(rec)
+		if closeFn != nil {
+			closeFn()
+		}
+	}
+
+	return emitCodexHookDecision(codexhook.Decision{
+		Effective: string(res.EffectiveDecision),
+		Reason:    res.Reason,
+		Rule:      res.Decision,
+		RiskScore: res.RiskScore,
+		Tags:      res.Tags,
+	})
+}
+
+// emitCodexHookDecision writes a Codex PermissionRequest verdict to stdout.
+// A nil output is a valid "no decision" response and still exits 0.
+func emitCodexHookDecision(d codexhook.Decision) int {
+	if err := codexhook.WriteOutput(os.Stdout, codexhook.BuildOutput(d)); err != nil {
+		fmt.Fprintln(os.Stderr, "codex-hook: write output:", err)
+		return 1
+	}
+	return 0
+}
+
+// emitCodexHookNoDecision writes a warning-only Codex hook response and exits
+// 0, letting Codex continue the normal approval path.
+func emitCodexHookNoDecision(message string) int {
+	if err := codexhook.WriteOutput(os.Stdout, codexhook.BuildNoDecision(message)); err != nil {
+		fmt.Fprintln(os.Stderr, "codex-hook: write output:", err)
 		return 1
 	}
 	return 0

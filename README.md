@@ -71,12 +71,13 @@ go build -o bin/shell-policy ./cmd/shell-policy
 | `eval` | 对命令评估策略，退出码反映决策。 |
 | `explain` | 同 `eval`，额外输出逐 leaf 的规则 trace。 |
 | `claude-hook` | 作为 Claude Code `PreToolUse` hook 运行：从 stdin 读取 hook JSON，向 stdout 输出权限决策。 |
+| `codex-hook` | 作为 Codex CLI `PermissionRequest` hook 运行：从 stdin 读取 hook JSON，向 stdout 输出自动审批决策。 |
 
 ## 在 Claude Code 中作为权限审核 hook
 
 `claude-hook` 子命令把本引擎接到 [Claude Code 的 `PreToolUse` hook](https://docs.anthropic.com/en/docs/claude-code/hooks)
 上，对 Agent 即将执行的 `Bash` 命令做规则审核。协议适配层在
-[internal/claudehook](internal/claudehook/claudehook.go)，刻意与
+[internal/hooks/claudehook](internal/hooks/claudehook/claudehook.go)，刻意与
 `policy` / `analyze` 解耦：它只认 Claude Code 的输入输出格式和一个
 与引擎无关的 `Decision` 类型，由 CLI 胶水层负责调用策略引擎并把
 `policy.Result` 翻译成 `Decision`。
@@ -142,6 +143,86 @@ go build -o bin/shell-policy ./cmd/shell-policy
 ```bash
 echo '{"tool_name":"Bash","cwd":"'"$PWD"'","tool_input":{"command":"rm -rf /etc"}}' \
   | ./bin/shell-policy claude-hook
+```
+
+## 在 Codex CLI 中作为权限自动审批 hook
+
+`codex-hook` 子命令把本引擎接到 Codex CLI 的 `PermissionRequest` hook 上。
+Codex 会在自身需要用户审批前调用这个 hook；本工具只处理 Codex 归一化后的
+`Bash` 权限请求，并评估 `tool_input.command`。
+
+### 协议
+
+- **输入**（stdin）：Codex `PermissionRequest` hook JSON，关键字段是
+  `hook_event_name`、`tool_name`、`tool_input.command`，可选
+  `tool_input.description`、`cwd`、`session_id`、`turn_id`。
+- **输出**（stdout，自动放行）：
+
+  ```json
+  {
+    "hookSpecificOutput": {
+      "hookEventName": "PermissionRequest",
+      "decision": {
+        "behavior": "allow"
+      }
+    }
+  }
+  ```
+
+- **输出**（stdout，自动拒绝）：
+
+  ```json
+  {
+    "hookSpecificOutput": {
+      "hookEventName": "PermissionRequest",
+      "decision": {
+        "behavior": "deny",
+        "message": "[shell-policy] deny (rule: ...): ..."
+      }
+    }
+  }
+  ```
+
+决策映射：
+
+| shell-policy 决策 | Codex hook 行为 |
+| --- | --- |
+| `allow` | 输出 `behavior: "allow"`，Codex 自动批准该权限请求。 |
+| `deny` | 输出 `behavior: "deny"`，Codex 拒绝该权限请求。 |
+| `ask` | 不输出决策，交还 Codex 默认审批流程。 |
+| 解析失败 / 策略加载失败 / 评估出错 | 输出 warning-only JSON，不批准、不拒绝，交还 Codex 默认审批流程。 |
+
+`codex-hook` 在已输出决策或主动不决策时都退出 0；只有输入 JSON 无法解析、
+flag 用法错误或 stdout 写入失败才返回非 0。
+
+### 配置示例
+
+在 `~/.codex/config.toml`（或项目级 `.codex/config.toml`）里注册：
+
+```toml
+[[hooks.PermissionRequest]]
+matcher = "Bash"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "/path/to/bin/shell-policy codex-hook --policy /path/to/policies/default.yaml --writable \"/path/to/project/build\""
+statusMessage = "checking shell policy"
+timeout = 10
+```
+
+`codex-hook` 复用所有公共 flag（`--policy` / `--workspace` / `--writable` /
+`--home` / `--log-level` / `--audit`）。未显式传 `--cwd` 时，会采用 hook
+输入里的 `cwd` 做路径规范化。加上 `--audit <file>` 可把每次决策（含
+`session_id`）追加为一行 JSONL 审计记录。
+
+Codex 对新 hook 或变更后的 hook 有信任确认流程；注册后按 Codex UI 提示信任该
+hook，或在受控自动化环境中使用 Codex 自身的 hook trust 选项。
+
+可先用管道在命令行手动验证：
+
+```bash
+echo '{"hook_event_name":"PermissionRequest","tool_name":"Bash","cwd":"'"$PWD"'","tool_input":{"command":"cat README.md"}}' \
+  | ./bin/shell-policy codex-hook
 ```
 
 ## 规则链与策略配置
@@ -275,7 +356,7 @@ rules:
 ## 仓库结构
 
 ```text
-cmd/shell-policy/      CLI 入口（parse / analyze / eval / explain）
+cmd/shell-policy/      CLI 入口（parse / analyze / eval / explain / hooks）
 internal/
   parser/             mvdan syntax 解析 → IR
   ir/                 IR 类型（Command / ResourceOp / NormalizedPath / Context）
@@ -287,6 +368,9 @@ internal/
   paths/              路径规范化、scope 分类、secret/writable 检测
   audit/              审计 JSONL 记录 + 可调级别诊断日志（log/slog）
   policy/             规则链引擎（matcher / engine / yaml 加载）
+  hooks/
+    claudehook/       Claude Code hook 协议适配
+    codexhook/        Codex CLI hook 协议适配
 policies/default.yaml 默认策略与规则链
 docs/AUTHORING_RULES.md  面向 AI / agent 的使用与规则编写指南
 plan.md               完整设计蓝图
