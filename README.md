@@ -259,7 +259,7 @@ actions:
 | 破坏性操作 | `deny_destructive` | deny | `rm -r` 系统路径、`rm -rf "$X"`、`chmod -R` 系统路径、`git push -f`、`git clean -fdx`、写块设备、`mkfs` / `fdisk` 等 |
 | 读取敏感文件 | `ask_sensitive_read` | ask | `.env`、私钥、凭证等 |
 | 范围不确定的读取 | `ask_broad_read` | ask | 工作区内的 `grep -r` / `rg` 递归搜索，以及可能展开到敏感文件名的通配符读取（`cat *`、`head docs/*.md`）；`ls`、`stat` 只看文件名，不算 |
-| 敏感文件外传 | `deny_secret_exfiltration` | deny | 读敏感文件并发往网络 |
+| 敏感文件外传 | `deny_secret_exfiltration` | deny | 读取敏感文件的内容并发往网络，且命令里看得出数据路径：同一条命令（`curl -d @.env`、`curl -T ~/.ssh/id_rsa`）、同一管道（`cat .env \| curl -d @-`）、`$(...)` 或经变量（`x=$(cat .env); curl -d "$x"`）。写入敏感文件（`curl -o .env`）不算；`cat .env; curl -d hi …` 这样只是同一行出现的，按读取敏感文件、网络访问各自判定 |
 | 网络访问 | `ask_network` | ask | `curl` / `wget` / `git fetch` 等 |
 | 远程或容器内执行 | `ask_remote` | ask | `ssh`、`docker exec` / `run`、`kubectl exec` |
 | 包管理 | `ask_package_manager` | ask | `apt` / `pip` / `npm install` 等 |
@@ -283,16 +283,19 @@ deny / ask 规则都是 `terminal: false`：同一条命令命中的所有类别
 | `audit` | 只记录审计信息 | false |
 
 `enrich` 规则让复杂逻辑可以拆成「先打标签，再统一决策」。例如先标记
-`secret_candidate` 和 `network_write`，再用一条 `decide` 规则
+`secret_read`（读取敏感文件的内容）和 `network_write`，再用一条 `decide` 规则
 `deny secret + network`，避免写一条巨大的规则。
 
 ```yaml
 rules:
-  - id: mark-secret-path
+  - id: mark-secret-read
     mode: enrich
-    order: 100
-    match: { path.secretCandidate: { equals: true } }
-    effects: { addTags: [secret_candidate], addRisk: 50 }
+    order: 101
+    match:
+      all:
+        - path.secretCandidate: { equals: true }
+        - operation.type: { in: [file_read, file_copy] }
+    effects: { addTags: [secret_read] }
     terminal: false
 
   - id: deny-secret-exfiltration
@@ -300,7 +303,7 @@ rules:
     order: 1000
     match:
       all:
-        - tags: { contains: secret_candidate }
+        - tags: { contains: secret_read }
         - tags: { contains: network_write }
     action: deny_secret_exfiltration
     terminal: true
@@ -312,6 +315,7 @@ rules:
 - 同一 leaf 上命中多条 deny / ask 规则（前面的是 `terminal: false`）时取最强的一条：deny 优先于 ask，同级取 `severity` 高者；之后命中的 allow 不会削弱已有的 ask / deny。
 - 规则链跑完仍没有决策的 leaf 使用 `defaultAction`，不会因为同一命令里另一个 leaf 被放行而被忽略：`cat a && make` 的 `make` 按默认动作处理。
 - 跨 leaf 合并只重跑 deny / ask 规则，并跳过 `match: {}` 这类兜底规则，所以 `cat a && cat b` 这样每段都被放行的组合命令仍然是 allow。
+- 跨 leaf 合并只合并数据能流过的 leaf：同一管道的命令；一条命令和它里面的 `$(...)`、被包装的内层命令；以及 `;` / `&&` / `||` 列表（含循环体）中有命令带动态参数时的整个列表（变量可能带着前面命令读到的内容）。`cat .env; curl -d hi …` 是两组，标签不合并。经文件中转的数据（`cp .env /tmp/x; curl -T /tmp/x …`）不跟踪。
 
 leaf 内按「(操作, 路径) 单元」匹配：`enrich` / `audit` 规则和 deny / ask 决策
 只要任一单元命中就生效；allow 规则只放行它命中的单元，其余单元继续往下匹配，

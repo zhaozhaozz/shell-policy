@@ -354,8 +354,10 @@ not: { ... }   # 取反
   `privilegeEscalated`）会从外层传递到内层 leaf。
 - **多 leaf 命令**：`a && b`、`a | b`、`a; b` 会产生多个 leaf。决策按
   `deny > ask > allow` 聚合；只要任一分支危险，整体就不会 allow。任一 leaf
-  没有被规则决定时按 `defaultAction` 处理。跨 leaf 合并阶段（把所有 leaf 的
-  tag 合在一起再跑一遍）只跑 deny / ask 规则，并跳过 `match: {}` 的兜底规则。
+  没有被规则决定时按 `defaultAction` 处理。跨 leaf 合并阶段（把数据能流过的
+  leaf 的 tag 合在一起再跑一遍：同一管道、命令和它的 `$(...)` / 内层命令、
+  带动态参数的命令所在的整个列表）只跑 deny / ask 规则，并跳过 `match: {}`
+  的兜底规则。`cat .env; curl -d hi x` 的两段不合并。
 - **单个 leaf 有多个操作或路径**：规则按「(操作, 路径) 单元」匹配。deny / ask
   只要任一单元命中就生效；allow 只放行它命中的单元，剩下的单元继续匹配后续规则，
   全部放行后 leaf 才是 allow。写 allow 规则时不要指望「顺带」放行同一命令的其他

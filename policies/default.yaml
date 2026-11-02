@@ -119,6 +119,21 @@ rules:
       addAuditNote: "Command touches a secret-like path"
     terminal: false
 
+  # Reading (or copying) the content of a secret-like file, as opposed to
+  # writing one or reading its metadata: what exfiltration needs.
+  - id: "mark-secret-read"
+    mode: "enrich"
+    order: 101
+    match:
+      all:
+        - path.secretCandidate:
+            equals: true
+        - operation.type:
+            in: ["file_read", "file_copy"]
+    effects:
+      addTags: ["secret_read"]
+    terminal: false
+
   - id: "mark-network-write"
     mode: "enrich"
     order: 110
@@ -212,13 +227,17 @@ rules:
   # ------------------------------------------------------------------
   # Phase 2 — Denies: destructive operations, exfiltration, inline eval.
   # ------------------------------------------------------------------
+  # Within one command (curl -d @.env), or across commands data can flow
+  # between: one pipeline, a command and its $(...), a list whose commands
+  # take variable arguments. `cat .env; curl -d hi x` shows no flow and is
+  # left to the other categories (sensitive read, network).
   - id: "deny-secret-exfiltration"
     mode: "decide"
     order: 1000
     match:
       all:
         - tags:
-            contains: "secret_candidate"
+            contains: "secret_read"
         - tags:
             contains: "network_write"
     action: "deny_secret_exfiltration"

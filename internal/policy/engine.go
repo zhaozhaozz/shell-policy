@@ -66,16 +66,26 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 	res.Operations = allOps
 
 	// Cross-leaf pass: re-run deny/ask rules against a synthetic leaf whose
-	// tags/risk are the union of all leaves' so cross-cutting rules (e.g.
-	// secret_candidate + network_write) can fire even when the contributing
-	// operations live on different leaves. The synthetic leaf has no command,
-	// operation or path, so allow rules and catch-all rules (empty match)
-	// are skipped: they would decide every multi-leaf command.
-	if len(leaves) > 1 {
-		merged := &LeafEvaluation{
-			Command:   root,
-			Tags:      append([]string(nil), res.Tags...),
-			RiskScore: res.RiskScore,
+	// tags/risk are the union of a flow group's leaves, so cross-cutting
+	// rules (e.g. secret_read + network_write) can fire when the contributing
+	// operations live on different leaves that data can pass between. The
+	// synthetic leaf has no command, operation or path, so allow rules and
+	// catch-all rules (empty match) are skipped: they would decide every
+	// multi-leaf command.
+	byLeaf := make(map[*ir.Command]LeafEvaluation, len(res.PerLeaf))
+	for _, le := range res.PerLeaf {
+		byLeaf[le.Command] = le
+	}
+	var crossLeaf []LeafEvaluation
+	for _, group := range flowGroups(root) {
+		if len(group) < 2 {
+			continue
+		}
+		merged := &LeafEvaluation{Command: root}
+		for _, l := range group {
+			le := byLeaf[l]
+			merged.Tags = mergeUnique(merged.Tags, le.Tags)
+			merged.RiskScore = max(merged.RiskScore, le.RiskScore)
 		}
 		for _, r := range e.Policy.Rules {
 			if !r.IsEnabled() || r.Mode != ModeDecide || len(r.Match) == 0 {
@@ -108,9 +118,10 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 			}
 		}
 		if merged.Decision != nil {
-			res.PerLeaf = append(res.PerLeaf, *merged)
+			crossLeaf = append(crossLeaf, *merged)
 		}
 	}
+	res.PerLeaf = append(res.PerLeaf, crossLeaf...)
 
 	// Aggregate decisions.
 	chosen := e.chooseFinal(res.PerLeaf)
@@ -306,6 +317,39 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 		}
 	}
 	return le, nil
+}
+
+// flowGroups splits the leaves of a command into the groups data can pass
+// between, for the cross-leaf pass: the commands of one pipeline; a command
+// with the substitutions and wrapped commands in it; and all commands of a
+// list (;, &&, ||, a loop body ...) in which some command takes dynamic
+// arguments, since a variable can carry what an earlier command read.
+// `cat .env; curl -d hi x` is two groups: nothing shows the file reaching
+// the network. Data passed through files is not followed.
+func flowGroups(root *ir.Command) [][]*ir.Command {
+	var groups [][]*ir.Command
+	var visit func(c *ir.Command)
+	visit = func(c *ir.Command) {
+		if c == nil {
+			return
+		}
+		leaves := ir.Leaves(c)
+		if c.Kind == ir.KindPipeline || c.Kind == ir.KindSimple {
+			groups = append(groups, leaves)
+			return
+		}
+		for _, l := range leaves {
+			if l.Simple.HasDynamicArgs {
+				groups = append(groups, leaves)
+				return
+			}
+		}
+		for _, ch := range c.Children {
+			visit(ch)
+		}
+	}
+	visit(root)
+	return groups
 }
 
 // stronger returns the stronger of two candidate decisions: deny > ask >
