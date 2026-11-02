@@ -69,7 +69,7 @@ func init() {
 	// directory effect (cd, pushd, popd) is tracked by the analyzer walk.
 	register([]string{
 		"cd", "chdir", "pushd", "popd", "dirs", "pwd", "true", "false", ":",
-		"test", "[", "exit", "logout", "wait", "jobs",
+		"test", "[", "[[", "((", "let", "exit", "logout", "wait", "jobs",
 	}, &commandSpec{Argv: argv.Spec{}, Operations: noOps})
 
 	register([]string{"export", "declare", "typeset", "readonly", "local", "unset"}, &commandSpec{

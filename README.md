@@ -243,6 +243,27 @@ actions:
   deny_destructive: { effectiveAction: deny, severity: 100 }
 ```
 
+### 默认策略的类别
+
+`policies/default.yaml` 把危险操作分成以下类别，每个类别对应一个具名 action。调用方可以只改 action 的效果（允许 / 询问 / 拒绝）而不改规则，例如 ShellGate 的「简单设置」。
+
+| 类别 | action | 默认 | 覆盖的命令 |
+| --- | --- | --- | --- |
+| 提权 | `ask_privilege` | ask | `sudo` / `su` / `doas` / `pkexec` 及其内层命令 |
+| 写、删、改权限：可写目录之外 | `ask_write_outside_writable` | ask | 可写目录外、目录未知、敏感文件或带动态参数的写 / 删 / 移动 / chmod / chown / git 写操作 |
+| 破坏性操作 | `deny_destructive` | deny | `rm -r` 系统路径、`rm -rf "$X"`、`chmod -R` 系统路径、`git push -f`、`git clean -fdx`、写块设备、`mkfs` / `fdisk` 等、风险分 ≥ 100 |
+| 读取敏感文件 | `ask_sensitive_read` | ask | `.env`、私钥、凭证等 |
+| 敏感文件外传 | `deny_secret_exfiltration` | deny | 读敏感文件并发往网络 |
+| 网络访问 | `ask_network` | ask | `curl` / `wget` / `git fetch` 等 |
+| 远程或容器内执行 | `ask_remote` | ask | `ssh`、`docker exec` / `run`、`kubectl exec` |
+| 包管理 | `ask_package_manager` | ask | `apt` / `pip` / `npm install` 等 |
+| 内联脚本 | `deny_inline_eval` | deny | `python -c`、`node -e` 等 |
+| 默认规则 | `default` | ask | 以上都没判定的命令（`defaultAction: default`） |
+
+另有几条固定规则（使用内置 `ask`，不属于任何类别）：改变后续命令行为的 shell 状态（`export PATH=...`、`alias`、`trap`、函数定义，即 `shell_config` 操作和函数体内的命令）以及 `exit` / `logout` 需要询问；`cd`、`pwd`、`echo`、`true`、普通变量的 `export` 等无副作用的内建命令直接放行。
+
+deny / ask 规则都是 `terminal: false`：同一条命令命中的所有类别都会记录，最终取最强的一条，所以把某个类别改成 ask 不会让另一个类别的 deny 失效。
+
 ### 规则的三种 mode
 
 | mode | 作用 | 默认 terminal |
@@ -334,7 +355,7 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
    ```yaml
    policy:
      id: default-ai-shell-policy
-     defaultAction: ask
+     defaultAction: default
      writableDirs:
        - "/home/me/project/build"
        - "/home/me/project/.cache"

@@ -153,14 +153,15 @@ func decide(command, cwd string) error {
 策略 YAML 顶层包含 `actions`、`rules`，可选 `defaultAction`、`writableDirs`：
 
 ```yaml
-defaultAction: ask
+defaultAction: default    # 没有规则决定的 leaf 使用的 action
 writableDirs: []          # 可写目录白名单（绝对或相对 cwd）
 
 actions:
   allow:           { effectiveAction: allow, severity: 0 }
-  ask:             { effectiveAction: ask,   severity: 10 }
-  ask_workspace_write: { effectiveAction: ask, severity: 20 }
-  deny_destructive:    { effectiveAction: deny, severity: 90 }
+  ask:             { effectiveAction: ask,   severity: 50 }
+  default:         { effectiveAction: ask,   severity: 50 }
+  ask_write_outside_writable: { effectiveAction: ask, severity: 55 }
+  deny_destructive:    { effectiveAction: deny, severity: 100 }
 
 rules:
   - id: deny-rm-system-root
@@ -209,8 +210,13 @@ rules:
 `recursive_force_delete`、`privilege_escalated`），随后的 `decide` 规则根据这些
 标签、operation、path scope 给出决策。
 
-`enrich` 累加的 `riskScore` 可被后续“风险兜底”规则使用，例如
-`riskScore >= 60 → ask`。
+`enrich` 累加的 `riskScore` 可被后续规则使用，例如默认策略的
+`deny-high-risk`（`riskScore >= 100 → deny_destructive`）。
+
+默认策略的 deny / ask 规则都写成 `terminal: false`：同一 leaf 命中的所有 deny / ask
+都会记录并取最强者，allow 规则放在不可绕过的 deny / ask 之后。新增 deny / ask 规则时
+建议同样不设 terminal，避免某个类别被改成 ask 后挡住后面另一个类别的 deny。
+默认策略的类别与 action 对照见 README「默认策略的类别」。
 
 ---
 
@@ -310,13 +316,14 @@ not: { ... }   # 取反
 - 策略文件 `writableDirs: [ build, dist ]`。
 
 `allow-writable-dir-mutation` 规则的判定条件（默认策略）：
-- 操作是 `file_write`/`file_append`/`file_delete`/`file_move`/`file_copy`/`file_chmod`/`file_chown`；
+- 操作是 `file_write`/`file_append`/`file_delete`/`file_move`/`file_copy`/`file_chmod`/`file_chown`/`git_write`（git 写操作的路径是仓库目录，即 `-C` 目录或当前目录）；
 - `path.writable == true`（操作的所有路径都在白名单内）；
 - `path.secretCandidate == false`（不是敏感文件）；
 - `command.hasDynamicArgs == false`（无动态参数）；
 - 不在远程 / 容器 / 提权上下文。
 
-只要有一个目标越界、命中敏感文件或带动态参数，就不会自动放行，回落到 ask。
+只要有一个目标越界、命中敏感文件或带动态参数，就不会自动放行，回落到
+`ask-write-outside-writable`（action `ask_write_outside_writable`）。
 
 示例：
 

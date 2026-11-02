@@ -24,12 +24,12 @@ func TestDefaultPolicyDecisionsForRepresentativeCommands(t *testing.T) {
 		{name: "dynamic recursive force delete", command: `rm -rf "$TARGET"`, decision: "deny_destructive", effective: EffectDeny, matchedRuleID: "deny-dynamic-recursive-force-rm"},
 		{name: "force push", command: `git push --force origin main`, decision: "deny_destructive", effective: EffectDeny, matchedRuleID: "deny-git-push-force"},
 		{name: "remote readonly command", command: `ssh host 'cat /tmp/log'`, decision: "ask_remote", effective: EffectAsk, matchedRuleID: "ask-remote-command"},
-		{name: "container readonly command", command: `docker exec -it app cat /tmp/log`, decision: "ask_container", effective: EffectAsk, matchedRuleID: "ask-container-exec"},
+		{name: "container readonly command", command: `docker exec -it app cat /tmp/log`, decision: "ask_remote", effective: EffectAsk, matchedRuleID: "ask-container-exec"},
 		{name: "inline language eval", command: `python -c 'print(1)'`, decision: "deny_inline_eval", effective: EffectDeny, matchedRuleID: "deny-inline-eval"},
-		{name: "workspace redirect write", command: `echo hi > out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
-		{name: "workspace redirect append", command: `echo hi >> out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
-		{name: "wrapper redirect write", command: `bash -c "echo hi" > out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
-		{name: "subshell redirect write", command: `(echo hi) > out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
+		{name: "workspace redirect write", command: `echo hi > out.txt`, decision: "ask_write_outside_writable", effective: EffectAsk, matchedRuleID: "ask-write-outside-writable"},
+		{name: "workspace redirect append", command: `echo hi >> out.txt`, decision: "ask_write_outside_writable", effective: EffectAsk, matchedRuleID: "ask-write-outside-writable"},
+		{name: "wrapper redirect write", command: `bash -c "echo hi" > out.txt`, decision: "ask_write_outside_writable", effective: EffectAsk, matchedRuleID: "ask-write-outside-writable"},
+		{name: "subshell redirect write", command: `(echo hi) > out.txt`, decision: "ask_write_outside_writable", effective: EffectAsk, matchedRuleID: "ask-write-outside-writable"},
 	}
 
 	for _, tc := range cases {
@@ -84,7 +84,7 @@ func TestWritableDirAutoAllow(t *testing.T) {
 			name:      "write without allowlist asks",
 			command:   `echo hi > build/out.txt`,
 			writable:  nil,
-			decision:  "ask_workspace_write",
+			decision:  "ask_write_outside_writable",
 			effective: EffectAsk,
 		},
 		{
@@ -112,14 +112,14 @@ func TestWritableDirAutoAllow(t *testing.T) {
 			name:      "secret inside writable dir still asks",
 			command:   `echo x > build/.env`,
 			writable:  []string{filepath.Join(root, "build")},
-			decision:  "ask",
+			decision:  "ask_write_outside_writable",
 			effective: EffectAsk,
 		},
 		{
 			name:      "write outside writable dir still asks",
 			command:   `echo hi > src/out.txt`,
 			writable:  []string{filepath.Join(root, "build")},
-			decision:  "ask_workspace_write",
+			decision:  "ask_write_outside_writable",
 			effective: EffectAsk,
 		},
 		{
@@ -147,14 +147,14 @@ func TestWritableDirAutoAllow(t *testing.T) {
 			name:      "cd out of writable dir before delete asks",
 			command:   `cd /etc && rm -f passwd`,
 			writable:  []string{root},
-			decision:  "ask",
+			decision:  "ask_write_outside_writable",
 			effective: EffectAsk,
 		},
 		{
 			name:      "second redirect outside writable dir asks",
 			command:   `echo hi > build/ok 2> /etc/cron.d/x`,
 			writable:  []string{filepath.Join(root, "build")},
-			decision:  "ask",
+			decision:  "ask_write_outside_writable",
 			effective: EffectAsk,
 		},
 	}
@@ -207,7 +207,7 @@ func TestComplexCommandDecisions(t *testing.T) {
 		// Control flow: any destructive branch forces deny via aggregation.
 		{"control flow destructive branch denied", `false && rm -rf / || echo safe`, "deny_destructive", EffectDeny},
 		// Command substitution hiding a delete still surfaces a decision.
-		{"command substitution delete asks", `echo $(rm -rf /tmp/x)`, "ask_workspace_write", EffectAsk},
+		{"command substitution delete asks", `echo $(rm -rf /tmp/x)`, "ask_write_outside_writable", EffectAsk},
 		// Recursive chmod on root is destructive.
 		{"recursive chmod root denied", `chmod -R 777 /`, "deny_destructive", EffectDeny},
 		// Reading a private key is a sensitive read.
@@ -235,14 +235,14 @@ func TestAllowMustCoverEveryOperation(t *testing.T) {
 		decision  string
 		effective EffectiveAction
 	}{
-		{"readonly command redirected into home", `cat README.md > ~/.bashrc`, "ask", EffectAsk},
-		{"readonly command redirected into system path", `cat README.md > /etc/hosts`, "ask", EffectAsk},
-		{"subshell redirected into system path", `(cat README.md) > /etc/hosts`, "ask", EffectAsk},
-		{"brace group redirected into secret", `{ cat README.md; } > .env`, "ask", EffectAsk},
-		{"second path outside workspace", `cat README.md /etc/passwd`, "ask", EffectAsk},
+		{"readonly command redirected into home", `cat README.md > ~/.bashrc`, "ask_write_outside_writable", EffectAsk},
+		{"readonly command redirected into system path", `cat README.md > /etc/hosts`, "ask_write_outside_writable", EffectAsk},
+		{"subshell redirected into system path", `(cat README.md) > /etc/hosts`, "ask_write_outside_writable", EffectAsk},
+		{"brace group redirected into secret", `{ cat README.md; } > .env`, "ask_write_outside_writable", EffectAsk},
+		{"second path outside workspace", `cat README.md /etc/passwd`, "default", EffectAsk},
 		{"system path after a workspace path", `rm -rf build /etc`, "deny_destructive", EffectDeny},
 		{"stream device redirect stays readonly", `ls missing 2>/dev/null`, "allow_readonly", EffectAllow},
-		{"dup redirect into system path", `cat README.md >& /etc/hosts`, "ask", EffectAsk},
+		{"dup redirect into system path", `cat README.md >& /etc/hosts`, "ask_write_outside_writable", EffectAsk},
 		{"descriptor duplication stays readonly", `ls missing 2>&1`, "allow_readonly", EffectAllow},
 	}
 

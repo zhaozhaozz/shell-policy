@@ -50,6 +50,17 @@ func init() {
 				rest = rest[1:]
 			}
 
+			// Writes act on the repository: the -C directory or the cwd, so
+			// rules can tell whether it lies in a writable directory.
+			repo := r.ResolveString(".")
+			if dir := stringFlag(p, "chdir"); dir != "" {
+				repo = r.ResolveString(dir)
+			}
+			if _, ok := p.Flags["gitDir"]; ok || p.Flags["workTree"] != nil || p.HasDynamic && p.Flags["chdir"] != nil {
+				repo = ir.NormalizedPath{Raw: "<repository>", Kind: ir.PathDynamic, Scope: ir.ScopeUnknown, Confidence: ir.ConfDynamic}
+			}
+			repoPaths := []ir.NormalizedPath{repo}
+
 			ops := []ir.ResourceOp{}
 			switch {
 			case sub == "":
@@ -71,6 +82,7 @@ func init() {
 				})
 				ops = append(ops, ir.ResourceOp{
 					Type:       ir.OpGitWrite,
+					Paths:      repoPaths,
 					Subcommand: []string{"git", sub},
 					Confidence: confOf(c.Simple),
 					Context:    c.Context,
@@ -78,6 +90,7 @@ func init() {
 			case gitWriteSubs[sub]:
 				ops = append(ops, ir.ResourceOp{
 					Type:       ir.OpGitWrite,
+					Paths:      repoPaths,
 					Subcommand: []string{"git", sub},
 					Confidence: confOf(c.Simple),
 					Context:    c.Context,
@@ -85,6 +98,7 @@ func init() {
 				if sub == "clean" || sub == "rm" {
 					ops = append(ops, ir.ResourceOp{
 						Type:       ir.OpFileDelete,
+						Paths:      repoPaths,
 						Subcommand: []string{"git", sub},
 						Confidence: confOf(c.Simple),
 						Context:    c.Context,

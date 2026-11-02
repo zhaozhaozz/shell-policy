@@ -1,18 +1,33 @@
 policy:
   id: "default-ai-shell-policy"
   name: "Default AI Shell Policy"
-  defaultAction: "ask"
+  # Leaves no rule decided use the `default` action below.
+  defaultAction: "default"
   # writableDirs is an operator-managed allowlist. Ordinary modifications
-  # (write / append / delete / move / copy / mkdir / touch ...) whose targets
-  # all fall inside one of these directories are auto-allowed by the
-  # "allow-writable-dir-mutation" rule below. Leave empty to disable, or
-  # supplement at runtime with the CLI `--writable <dir>` flag.
+  # (write / append / delete / move / copy / mkdir / touch / git writes ...)
+  # whose targets all fall inside one of these directories are auto-allowed
+  # by the "allow-writable-dir-mutation" rule below. Leave empty to disable,
+  # or supplement at runtime with the CLI `--writable <dir>` flag.
   # Example:
   #   writableDirs:
   #     - "/home/me/project/build"
   #     - "/home/me/project/.cache"
   writableDirs: []
 
+# Actions are grouped into categories. Each category below has exactly one
+# named action, so a caller can switch a whole category between allow / ask /
+# deny (for example ShellGate's simple settings) without editing rules:
+#
+#   ask_privilege                sudo / su / doas / pkexec
+#   ask_write_outside_writable   write, delete, chmod outside writableDirs
+#   deny_destructive             rm -rf on system paths, git push -f, mkfs ...
+#   ask_sensitive_read           reading .env, private keys, credentials
+#   deny_secret_exfiltration     sending secret-like data over the network
+#   ask_network                  curl / wget / git fetch ...
+#   ask_remote                   ssh, docker exec / run, kubectl exec
+#   ask_package_manager          apt / pip / npm install ...
+#   deny_inline_eval             python -c, node -e ...
+#   default                      every command no rule decided
 actions:
   allow:
     effectiveAction: "allow"
@@ -26,21 +41,24 @@ actions:
   allow_readonly:
     effectiveAction: "allow"
     severity: 0
-  ask_network:
+  default:
     effectiveAction: "ask"
-    severity: 60
+    severity: 50
+  ask_privilege:
+    effectiveAction: "ask"
+    severity: 65
+  ask_write_outside_writable:
+    effectiveAction: "ask"
+    severity: 55
   ask_sensitive_read:
     effectiveAction: "ask"
     severity: 70
+  ask_network:
+    effectiveAction: "ask"
+    severity: 60
   ask_remote:
     effectiveAction: "ask"
     severity: 65
-  ask_container:
-    effectiveAction: "ask"
-    severity: 60
-  ask_workspace_write:
-    effectiveAction: "ask"
-    severity: 55
   ask_package_manager:
     effectiveAction: "ask"
     severity: 60
@@ -54,6 +72,10 @@ actions:
     effectiveAction: "deny"
     severity: 95
 
+# Deny and ask rules are non-terminal: every one that matches is recorded and
+# the strongest wins, so switching one category to "ask" never hides another
+# category's "deny" on the same command. Allow rules come after the deny/ask
+# rules that must not be bypassed and only clear the operations they match.
 rules:
   # ------------------------------------------------------------------
   # Phase 1 — Enrichment: tag and risk-score the leaf command.
@@ -161,7 +183,7 @@ rules:
     terminal: false
 
   # ------------------------------------------------------------------
-  # Phase 2 — Hard denies (highest priority).
+  # Phase 2 — Denies: destructive operations, exfiltration, inline eval.
   # ------------------------------------------------------------------
   - id: "deny-secret-exfiltration"
     mode: "decide"
@@ -174,7 +196,7 @@ rules:
             contains: "network_write"
     action: "deny_secret_exfiltration"
     reason: "Secret-like data may be sent over network"
-    terminal: true
+    terminal: false
 
   - id: "deny-rm-system-root"
     mode: "decide"
@@ -189,7 +211,7 @@ rules:
             in: ["system"]
     action: "deny_destructive"
     reason: "Recursive removal targeting system path"
-    terminal: true
+    terminal: false
 
   - id: "deny-dynamic-recursive-force-rm"
     mode: "decide"
@@ -206,7 +228,7 @@ rules:
             equals: true
     action: "deny_destructive"
     reason: "rm -rf with dynamic arguments cannot be statically validated"
-    terminal: true
+    terminal: false
 
   - id: "deny-chmod-recursive-system"
     mode: "decide"
@@ -221,7 +243,7 @@ rules:
             equals: "system"
     action: "deny_destructive"
     reason: "Recursive permission change on system path"
-    terminal: true
+    terminal: false
 
   - id: "deny-git-push-force"
     mode: "decide"
@@ -236,7 +258,7 @@ rules:
             equals: true
     action: "deny_destructive"
     reason: "git push --force is denied by default"
-    terminal: true
+    terminal: false
 
   - id: "deny-git-clean-fdx"
     mode: "decide"
@@ -251,19 +273,29 @@ rules:
             equals: true
     action: "deny_destructive"
     reason: "git clean -fdx is denied by default"
-    terminal: true
+    terminal: false
 
-  - id: "deny-docker-privileged"
+  - id: "deny-block-device-write"
     mode: "decide"
     order: 1060
     match:
       all:
-        - command.wrapperType:
-            equals: "docker_run"
-        - context.privilegeEscalated:
-            equals: false
-    action: "ask"
-    reason: "docker run requires approval"
+        - operation.type:
+            in: ["file_write", "file_append", "file_delete", "file_move", "file_chmod", "file_chown"]
+        - path.absolute:
+            regex: "^/dev/(sd|hd|vd|xvd|nvme|mmcblk|disk|loop|md|dm-|mapper/)"
+    action: "deny_destructive"
+    reason: "Writing to a block device destroys its data"
+    terminal: false
+
+  - id: "deny-disk-format"
+    mode: "decide"
+    order: 1070
+    match:
+      command.program:
+        regex: "^(mkfs(\\..+)?|mke2fs|mkswap|wipefs|fdisk|sfdisk|cfdisk|parted|sgdisk)$"
+    action: "deny_destructive"
+    reason: "Formatting or partitioning disks is denied by default"
     terminal: false
 
   - id: "deny-inline-eval"
@@ -274,10 +306,85 @@ rules:
         equals: "language_eval"
     action: "deny_inline_eval"
     reason: "Inline language evaluation (python/node/perl/ruby -e/-c) is denied by default"
-    terminal: true
+    terminal: false
+
+  - id: "deny-high-risk"
+    mode: "decide"
+    order: 1090
+    match:
+      riskScore:
+        greaterThanOrEqual: 100
+    action: "deny_destructive"
+    reason: "Aggregated risk score is too high"
+    terminal: false
 
   # ------------------------------------------------------------------
-  # Phase 3 — Allow well-known readonly commands inside the workspace.
+  # Phase 3 — Asks that no allow rule may override.
+  # ------------------------------------------------------------------
+  - id: "ask-privilege"
+    mode: "decide"
+    order: 1100
+    match:
+      any:
+        - context.privilegeEscalated:
+            equals: true
+        - command.program:
+            in: ["sudo", "su", "doas", "pkexec"]
+    action: "ask_privilege"
+    reason: "Running with elevated privileges requires approval"
+    terminal: false
+
+  - id: "ask-remote-command"
+    mode: "decide"
+    order: 1110
+    match:
+      any:
+        - context.inRemoteCommand:
+            equals: true
+        - operation.type:
+            equals: "remote_exec"
+    action: "ask_remote"
+    reason: "Remote command requires approval"
+    terminal: false
+
+  - id: "ask-container-exec"
+    mode: "decide"
+    order: 1120
+    match:
+      any:
+        - context.inContainerCommand:
+            equals: true
+        - command.wrapperType:
+            in: ["docker_exec", "docker_run", "kubectl_exec"]
+    action: "ask_remote"
+    reason: "Running a command in a container requires approval"
+    terminal: false
+
+  - id: "ask-shell-config"
+    mode: "decide"
+    order: 1130
+    match:
+      any:
+        - operation.type:
+            equals: "shell_config"
+        - context.inFunction:
+            equals: true
+    action: "ask"
+    reason: "Changing PATH, aliases, traps or defining functions changes what later commands run"
+    terminal: false
+
+  - id: "ask-shell-exit"
+    mode: "decide"
+    order: 1140
+    match:
+      command.program:
+        in: ["exit", "logout"]
+    action: "ask"
+    reason: "Exiting the shell ends the session"
+    terminal: false
+
+  # ------------------------------------------------------------------
+  # Phase 4 — Allow ordinary work inside the workspace and writable dirs.
   # ------------------------------------------------------------------
   - id: "allow-writable-dir-mutation"
     mode: "decide"
@@ -285,7 +392,7 @@ rules:
     match:
       all:
         - operation.type:
-            in: ["file_write", "file_append", "file_delete", "file_move", "file_copy", "file_chmod", "file_chown"]
+            in: ["file_write", "file_append", "file_delete", "file_move", "file_copy", "file_chmod", "file_chown", "git_write"]
         - path.writable:
             equals: true
         - path.secretCandidate:
@@ -338,7 +445,7 @@ rules:
     match:
       all:
         - command.program:
-            in: ["pwd", "ls", "cat", "head", "tail", "stat", "file", "echo", "printf", "grep", "egrep", "fgrep", "rg"]
+            in: ["ls", "cat", "head", "tail", "stat", "file", "grep", "egrep", "fgrep", "rg"]
         - operation.type:
             in: ["file_read", "file_list", "file_read_metadata"]
         - path.scope:
@@ -390,8 +497,32 @@ rules:
     action: "allow_readonly"
     terminal: true
 
+  # Builtins with no file, network or process effect: cd, pwd, echo, export
+  # of ordinary variables ... A redirect on them is a separate operation that
+  # the rules above or below decide.
+  - id: "allow-shell-builtin"
+    mode: "decide"
+    order: 5030
+    match:
+      all:
+        - command.program:
+            in: ["cd", "chdir", "pushd", "popd", "dirs", "pwd", "echo", "printf", "true", "false", ":",
+                 "test", "[", "[[", "((", "let", "export", "declare", "typeset", "readonly", "local",
+                 "unset", "alias", "trap", "hash", "wait", "jobs"]
+        - operation.type:
+            exists: false
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
+    action: "allow_readonly"
+    reason: "Shell builtin without side effects"
+    terminal: true
+
   # ------------------------------------------------------------------
-  # Phase 4 — Ask for medium-risk operations.
+  # Phase 5 — Asks for medium-risk operations nothing above allowed.
   # ------------------------------------------------------------------
   - id: "ask-secret-read"
     mode: "decide"
@@ -404,7 +535,7 @@ rules:
             in: ["file_read", "file_read_metadata"]
     action: "ask_sensitive_read"
     reason: "Reading a secret-like file requires approval"
-    terminal: true
+    terminal: false
 
   - id: "ask-network-write"
     mode: "decide"
@@ -414,7 +545,7 @@ rules:
         equals: "network_write"
     action: "ask_network"
     reason: "Network write requires approval"
-    terminal: true
+    terminal: false
 
   - id: "ask-network-read"
     mode: "decide"
@@ -424,68 +555,26 @@ rules:
         equals: "network_read"
     action: "ask_network"
     reason: "Network read requires approval"
-    terminal: true
+    terminal: false
 
-  - id: "ask-remote-command"
+  - id: "ask-package-manager"
     mode: "decide"
     order: 6030
     match:
-      context.inRemoteCommand:
-        equals: true
-    action: "ask_remote"
-    reason: "Remote command requires approval"
-    terminal: true
+      operation.type:
+        equals: "package_install"
+    action: "ask_package_manager"
+    reason: "Installing or removing packages requires approval"
+    terminal: false
 
-  - id: "ask-container-exec"
-    mode: "decide"
-    order: 6040
-    match:
-      context.inContainerCommand:
-        equals: true
-    action: "ask_container"
-    reason: "Container command requires approval"
-    terminal: true
-
-  - id: "ask-workspace-write"
+  # Mutations the writable-dir rule did not allow: outside writableDirs, in
+  # an unknown directory, on a sensitive file or with dynamic arguments.
+  - id: "ask-write-outside-writable"
     mode: "decide"
     order: 6050
     match:
-      all:
-        - operation.type:
-            in: ["file_write", "file_append", "file_delete", "file_move", "file_chmod", "file_chown"]
-        - path.scope:
-            in: ["inside_workspace", "tmp"]
-    action: "ask_workspace_write"
-    reason: "Workspace mutation requires approval"
-    terminal: true
-
-  # ------------------------------------------------------------------
-  # Phase 5 — Risk-score fallbacks.
-  # ------------------------------------------------------------------
-  - id: "deny-high-risk"
-    mode: "decide"
-    order: 8000
-    match:
-      riskScore:
-        greaterThanOrEqual: 100
-    action: "deny"
-    reason: "Aggregated risk score is too high"
-    terminal: true
-
-  - id: "ask-medium-risk"
-    mode: "decide"
-    order: 8010
-    match:
-      riskScore:
-        greaterThanOrEqual: 40
-    action: "ask"
-    reason: "Aggregated risk score requires approval"
-    terminal: true
-
-  - id: "ask-unknown-default"
-    mode: "decide"
-    order: 9999
-    match: {}
-    action: "ask"
-    reason: "No specific rule matched; default action applied"
-    terminal: true
+      operation.type:
+        in: ["file_write", "file_append", "file_delete", "file_move", "file_copy", "file_chmod", "file_chown", "git_write"]
+    action: "ask_write_outside_writable"
+    reason: "Modification outside the writable directories requires approval"
+    terminal: false
