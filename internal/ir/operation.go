@@ -71,6 +71,10 @@ type NormalizedPath struct {
 	Kind            PathKind  `json:"kind"`
 	Scope           PathScope `json:"scope"`
 	SecretCandidate bool      `json:"secretCandidate,omitempty"`
+	// SecretPossible marks a read whose files are not statically known and
+	// may include secret-like ones: a glob that can expand to a sensitive
+	// name, or the root of a recursive search. SecretCandidate wins.
+	SecretPossible bool `json:"secretPossible,omitempty"`
 	// Writable is true when the path falls inside one of the resolver's
 	// configured writable roots (an operator-managed allowlist).
 	Writable   bool       `json:"writable,omitempty"`

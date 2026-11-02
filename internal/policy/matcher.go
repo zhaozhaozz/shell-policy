@@ -264,6 +264,20 @@ func lookupField(field string, ctx *matchCtx) (any, bool) {
 		if ctx.path != nil {
 			return string(ctx.path.Scope), true
 		}
+	case field == "path.secretPossible":
+		// Per (operation, path) unit: "cat README.md *" only has the glob
+		// as a possible secret read.
+		if ctx.path != nil {
+			return ctx.path.SecretPossible, true
+		}
+		if ctx.op != nil {
+			for _, p := range ctx.op.Paths {
+				if p.SecretPossible {
+					return true, true
+				}
+			}
+			return false, true
+		}
 	case field == "path.secretCandidate":
 		if ctx.op != nil {
 			for _, p := range ctx.op.Paths {
@@ -578,7 +592,7 @@ var knownFields = map[string]bool{
 	"command.program": true, "command.subcommand": true, "command.subcommandString": true,
 	"command.hasDynamicArgs": true, "command.wrapperType": true, "command.hasAssignments": true,
 	"operation.type": true, "operation.target": true, "operation.dynamic": true,
-	"path.scope": true, "path.secretCandidate": true, "path.writable": true, "path.absolute": true,
+	"path.scope": true, "path.secretCandidate": true, "path.secretPossible": true, "path.writable": true, "path.absolute": true,
 	"path.normalized": true, "path.normalizedRegex": true, "path.raw": true, "path.rawRegex": true,
 	"context.inPipeline": true, "context.inSubshell": true, "context.inCommandSubstitution": true,
 	"context.inRemoteCommand": true, "context.remoteHost": true, "context.inContainerCommand": true,

@@ -258,6 +258,7 @@ actions:
 | 写、删、改权限：可写目录之外 | `ask_write_outside_writable` | ask | 可写目录外、目录未知、敏感文件或带动态参数的写 / 删 / 移动 / chmod / chown / git 写操作 |
 | 破坏性操作 | `deny_destructive` | deny | `rm -r` 系统路径、`rm -rf "$X"`、`chmod -R` 系统路径、`git push -f`、`git clean -fdx`、写块设备、`mkfs` / `fdisk` 等、风险分 ≥ 100 |
 | 读取敏感文件 | `ask_sensitive_read` | ask | `.env`、私钥、凭证等 |
+| 范围不确定的读取 | `ask_broad_read` | ask | 工作区内的 `grep -r` / `rg` 递归搜索，以及可能展开到敏感文件名的通配符读取（`cat *`、`head docs/*.md`）；`ls`、`stat` 只看文件名，不算 |
 | 敏感文件外传 | `deny_secret_exfiltration` | deny | 读敏感文件并发往网络 |
 | 网络访问 | `ask_network` | ask | `curl` / `wget` / `git fetch` 等 |
 | 远程或容器内执行 | `ask_remote` | ask | `ssh`、`docker exec` / `run`、`kubectl exec` |
@@ -335,6 +336,7 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
 | `operation.target` / `operation.dynamic` | 操作目标 / 是否动态 |
 | `path.scope` | 路径 scope（见下） |
 | `path.secretCandidate` | 是否疑似 secret 路径 |
+| `path.secretPossible` | 读取范围不确定、可能读到敏感文件（递归搜索的起点，或可能展开到敏感文件名的 glob） |
 | `path.writable` | 操作的全部路径是否都在可写目录内 |
 | `path.absolute` / `path.normalized` / `path.raw` | 当前路径字符串，配合 `regex` 使用 |
 | `context.inRemoteCommand` / `context.inContainerCommand` / `context.privilegeEscalated` / `context.inFunction` 等 | 上下文 |
@@ -400,10 +402,12 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
 - `rg --pre` 会对每个文件启动程序，记为 `process_exec`。
 - 程序前带环境变量赋值（`NAME=value cmd`）时不再按只读放行；`PAGER`、`GIT_PAGER`、`GIT_EXTERNAL_DIFF`、`EDITOR`、`LESSOPEN`、`GIT_CONFIG*` 等会让工具启动其他程序的变量记为 `shell_config`。
 - `.git/config` 和 `.git/hooks/` 视为敏感路径：它们决定之后的 git 命令运行哪些程序，写入不会因为在可写目录内而自动放行。
+- 读到哪些文件静态上看不出来时不按只读放行，而归入「范围不确定的读取」（`ask_broad_read`）：`grep -r`、`rg`（参数不是 `README.md` 这类带扩展名的文件名时）递归搜索的每个起点，以及可能展开到敏感文件名的 glob。glob 判断按 shell 的规则：`*` 不匹配以 `.` 开头的名字，所以 `cat *` 可能读到 `demo.key`，却读不到 `.env`；内置的 `secret*` 让 `*.md` 这类 glob 也可能命中（`secrets.md`）。这一类与「读取敏感文件」分开，可以为了方便单独放行，而不放行明确的敏感文件读取。
+- 静态分析看不到文件系统：符号链接、`find -exec`、`tar` / `cp -r` 打包或复制后再读等方式仍可能读到敏感文件。需要硬性的文件隔离时，应由执行环境（容器、权限）提供。
 
 ### 追加敏感路径
 
-内置的敏感路径识别（`.env`、`.ssh/`、`*.pem`、`*.key`、`.npmrc`、`.netrc` 等）始终生效。需要更多时，可以在策略文件的 `policy.sensitivePaths` 里写，或用 `--sensitive` 按调用追加（库调用方设置 `paths.Resolver.SensitivePaths`）。命中的路径和内置敏感路径一样：scope 为 `secret_candidate`，读取询问、写入不自动放行、外传拒绝。
+内置的敏感路径识别（`.env`、`.ssh/`、`*.pem`、`*.key`、`.npmrc`、`.netrc` 等）始终生效。需要更多时，可以在策略文件的 `policy.sensitivePaths` 里写，或用 `--sensitive` 按调用追加（库调用方设置 `paths.Resolver.SensitivePaths`）。命中的路径和内置敏感路径一样：scope 为 `secret_candidate`，读取询问、写入不自动放行、外传拒绝；可能展开到这些路径的 glob 归入「范围不确定的读取」。内置列表本身也用这种写法：`.env`、`.env.*`、`.ssh/`、`id_rsa`、`*.pem`、`*.key`、`*.p12`、`.kube/config`、`.aws/credentials`、`.npmrc`、`.netrc`、`credentials`、`secret*`、`.git/config`、`.git/hooks/` 等。
 
 模式按路径分量逐段匹配，每段可以用 glob（`*`、`?`、`[...]`），命中某个目录也覆盖它下面的所有内容：
 

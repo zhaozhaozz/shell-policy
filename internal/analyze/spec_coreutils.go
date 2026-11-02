@@ -25,7 +25,7 @@ func init() {
 			}
 			return []ir.ResourceOp{{
 				Type:       ir.OpFileList,
-				Paths:      pathsFromArgs(args, r),
+				Paths:      listingPaths(args, r),
 				Flags:      p.Flags,
 				Confidence: confOf(c.Simple),
 				Dynamic:    p.HasDynamic,
@@ -62,7 +62,7 @@ func init() {
 		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
 			return []ir.ResourceOp{{
 				Type:       ir.OpFileReadMetadata,
-				Paths:      pathsFromArgs(p.Positionals, r),
+				Paths:      listingPaths(p.Positionals, r),
 				Confidence: confOf(c.Simple),
 				Dynamic:    p.HasDynamic,
 				Context:    c.Context,
@@ -101,12 +101,28 @@ func init() {
 			if pre := stringFlag(p, "pre"); pre != "" || p.Flags["pre"] != nil {
 				ops = append(ops, ir.ResourceOp{Type: ir.OpProcessExec, Target: pre, Confidence: confOf(c.Simple), Context: c.Context})
 			}
+			// grep -r and rg search directory trees: which files they read
+			// is not statically known, so each search root may include
+			// secret-like files. Without operands both search ".".
+			prog := c.Simple.NormalizedProgram
+			rg := prog[strings.LastIndex(prog, "/")+1:] == "rg"
+			recursive := rg || boolFlag(p, "recursive")
 			if len(args) == 0 {
-				return ops
+				if !recursive {
+					return ops // reads stdin
+				}
+				args = []ir.ArgValue{{Raw: ".", Value: ".", Confidence: ir.ConfStatic}}
+			}
+			ps := pathsFromArgs(args, r)
+			for i := range ps {
+				// rg on a plain file name (README.md) is not a tree search.
+				if recursive && !ps[i].SecretCandidate && !(rg && looksLikeFile(args[i])) {
+					ps[i].SecretPossible = true
+				}
 			}
 			return append(ops, ir.ResourceOp{
 				Type:       ir.OpFileRead,
-				Paths:      pathsFromArgs(args, r),
+				Paths:      ps,
 				Flags:      p.Flags,
 				Confidence: confOf(c.Simple),
 				Dynamic:    p.HasDynamic,
@@ -543,4 +559,16 @@ func curlAtFilePath(value string) (string, bool) {
 		return value[idx+1:], true
 	}
 	return "", false
+}
+
+// looksLikeFile reports whether an operand names a regular file by its
+// shape: a static name whose last component has an extension (README.md,
+// src/main.go). Hidden names (.config) and anything else may be a directory.
+func looksLikeFile(a ir.ArgValue) bool {
+	if a.Confidence != ir.ConfStatic || strings.HasSuffix(a.Value, "/") {
+		return false
+	}
+	base := a.Value[strings.LastIndex(a.Value, "/")+1:]
+	dot := strings.LastIndex(base, ".")
+	return dot > 0 && dot < len(base)-1
 }

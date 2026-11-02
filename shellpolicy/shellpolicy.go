@@ -226,6 +226,10 @@ type Path struct {
 	Scope     string `json:"scope"`
 	Writable  bool   `json:"writable,omitempty"`
 	Sensitive bool   `json:"sensitive,omitempty"`
+	// MaybeSensitive marks a read that may reach sensitive files the
+	// analyzer cannot name: a recursive search root or a glob that can
+	// expand to a sensitive name.
+	MaybeSensitive bool `json:"maybe_sensitive,omitempty"`
 }
 
 // Evaluate parses, analyzes and evaluates command. A command that cannot be
@@ -274,7 +278,7 @@ func (p *Policy) Evaluate(command string, env Env) (*Result, error) {
 	for _, op := range res.Operations {
 		o := Operation{Type: string(op.Type), Target: op.Target}
 		for _, np := range op.Paths {
-			o.Paths = append(o.Paths, Path{Raw: np.Raw, Absolute: np.Absolute, Scope: string(np.Scope), Writable: np.Writable, Sensitive: np.SecretCandidate})
+			o.Paths = append(o.Paths, Path{Raw: np.Raw, Absolute: np.Absolute, Scope: string(np.Scope), Writable: np.Writable, Sensitive: np.SecretCandidate, MaybeSensitive: np.SecretPossible})
 		}
 		out.Operations = append(out.Operations, o)
 	}

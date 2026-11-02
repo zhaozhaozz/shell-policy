@@ -33,6 +33,17 @@ func pathsFromArgs(args []ir.ArgValue, r *paths.Resolver) []ir.NormalizedPath {
 	return out
 }
 
+// listingPaths resolves the operands of a command that only reveals names
+// and metadata (ls, stat): a glob that may expand to a secret-like name is
+// not a possible secret read there.
+func listingPaths(args []ir.ArgValue, r *paths.Resolver) []ir.NormalizedPath {
+	out := pathsFromArgs(args, r)
+	for i := range out {
+		out[i].SecretPossible = false
+	}
+	return out
+}
+
 // boolFlag returns true if a flag is set to a truthy value.
 func boolFlag(p *argv.Parsed, name string) bool {
 	v, ok := p.Flags[name]

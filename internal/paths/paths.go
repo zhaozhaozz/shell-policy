@@ -8,7 +8,6 @@ package paths
 
 import (
 	"path/filepath"
-	"regexp"
 	"strings"
 
 	"github.com/self/shell_permission/internal/ir"
@@ -32,29 +31,17 @@ type Resolver struct {
 	SensitivePaths []string
 }
 
-// secretPatterns is the built-in list of paths considered secret-like.
-// Patterns are anchored against the path basename or full path tail.
-var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(^|/)\.env(\..+)?$`),
-	regexp.MustCompile(`(^|/)\.ssh/`),
-	regexp.MustCompile(`(^|/)id_rsa(\.pub)?$`),
-	regexp.MustCompile(`(^|/)id_ed25519(\.pub)?$`),
-	regexp.MustCompile(`\.pem$`),
-	regexp.MustCompile(`\.key$`),
-	regexp.MustCompile(`\.p12$`),
-	regexp.MustCompile(`(^|/)\.kube/config$`),
-	regexp.MustCompile(`(^|/)\.aws/credentials$`),
-	regexp.MustCompile(`(^|/)\.gcp/`),
-	regexp.MustCompile(`(^|/)\.azure/`),
-	regexp.MustCompile(`(^|/)\.npmrc$`),
-	regexp.MustCompile(`(^|/)\.pypirc$`),
-	regexp.MustCompile(`(^|/)\.netrc$`),
-	regexp.MustCompile(`(^|/)credentials(\.json)?$`),
-	regexp.MustCompile(`(^|/)secret`),
+// builtinSensitive is the built-in list of secret-like paths, in the
+// sensitive-path syntax of MatchSensitive (unanchored, per component, a
+// match covers everything below it). Keeping one syntax lets the glob check
+// (GlobMayHit) reason about the built-in list and the user's patterns alike.
+var builtinSensitive = []string{
+	".env", ".env.*", ".ssh/", "id_rsa", "id_rsa.pub", "id_ed25519", "id_ed25519.pub",
+	"*.pem", "*.key", "*.p12", ".kube/config", ".aws/credentials", ".gcp/", ".azure/",
+	".npmrc", ".pypirc", ".netrc", "credentials", "credentials.json", "secret*",
 	// Git's own config and hooks decide which programs later git commands
 	// run (core.pager, hooks): writing them is not an ordinary edit.
-	regexp.MustCompile(`(^|/)\.git/config$`),
-	regexp.MustCompile(`(^|/)\.git/hooks(/|$)`),
+	".git/config", ".git/hooks/",
 }
 
 // Resolve converts an ArgValue believed to be a path into a NormalizedPath.
@@ -98,6 +85,9 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 		}
 		if np.SecretCandidate {
 			np.Scope = ir.ScopeSecretCandidate
+		} else {
+			// "cat *" names no secret, but can expand to demo.key.
+			np.SecretPossible = r.globMayHitSecret(raw)
 		}
 		return np
 	}
@@ -285,6 +275,27 @@ func (r *Resolver) isSecret(p string) bool {
 	return false
 }
 
+// globMayHitSecret reports whether the glob raw could expand to a path that
+// a built-in or user sensitive pattern covers. The glob is anchored like a
+// static path (~ and the working directory) when possible.
+func (r *Resolver) globMayHitSecret(raw string) bool {
+	g := raw
+	switch {
+	case (g == "~" || strings.HasPrefix(g, "~/")) && r.Home != "":
+		g = filepath.Join(r.Home, strings.TrimPrefix(g, "~"))
+	case !filepath.IsAbs(g) && !strings.HasPrefix(g, "~") && r.Cwd != "":
+		g = filepath.Join(r.Cwd, g)
+	}
+	for _, pats := range [][]string{builtinSensitive, r.SensitivePaths} {
+		for _, pat := range pats {
+			if GlobMayHit(pat, g, r.Home) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // MatchSensitive reports whether path p is covered by a sensitive-path
 // pattern. Patterns are matched component by component, each component may
 // be a glob (*, ?, [...]), and a match also covers everything below it:
@@ -365,10 +376,172 @@ func ValidSensitivePattern(pattern string) bool {
 }
 
 func isSecretPath(p string) bool {
-	for _, re := range secretPatterns {
-		if re.MatchString(p) {
+	for _, pat := range builtinSensitive {
+		if MatchSensitive(pat, p, "") {
 			return true
 		}
 	}
 	return false
+}
+
+// GlobMayHit reports whether some path the shell glob g can expand to is
+// covered by the sensitive pattern (MatchSensitive syntax). Wildcards follow
+// the shell: they never match a leading dot, and a "**" component (globstar)
+// spans any number of non-hidden directories. Character classes are compared
+// loosely, so the answer errs towards "may hit".
+func GlobMayHit(pattern, g, home string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" || g == "" {
+		return false
+	}
+	anchored := false
+	switch {
+	case pattern == "~" || strings.HasPrefix(pattern, "~/"):
+		anchored = true
+		if home != "" {
+			pattern = filepath.Join(home, strings.TrimPrefix(pattern, "~"))
+		}
+	case strings.HasPrefix(pattern, "/"):
+		anchored = true
+	}
+	pc, gc := splitComponents(pattern), splitComponents(g)
+	if len(pc) == 0 {
+		return false
+	}
+	// hit(i, j): glob components gc[i:] can produce pattern components pc[j:]
+	// in order; once the pattern is complete, anything below is covered.
+	var hit func(i, j int) bool
+	hit = func(i, j int) bool {
+		if j == len(pc) {
+			return true
+		}
+		if i == len(gc) {
+			return false
+		}
+		if gc[i] == "**" {
+			return hit(i+1, j) || !strings.HasPrefix(pc[j], ".") && hit(i, j+1)
+		}
+		return componentsMeet(pc[j], gc[i]) && hit(i+1, j+1)
+	}
+	if anchored {
+		return hit(0, 0)
+	}
+	for start := range gc {
+		if hit(start, 0) {
+			return true
+		}
+	}
+	return false
+}
+
+// componentsMeet reports whether one path component can match both the
+// sensitive pattern component p and the glob component g.
+func componentsMeet(p, g string) bool {
+	if !containsGlob(g) {
+		ok, err := filepath.Match(p, g)
+		return err == nil && ok
+	}
+	if !strings.HasPrefix(g, ".") && strings.HasPrefix(p, ".") {
+		return false // the shell's wildcards skip dot files
+	}
+	return globsMeet(globTokens(p), globTokens(g))
+}
+
+// globTok is one element of a glob: "*", "?", a [class] or a literal rune.
+type globTok struct {
+	star, any bool
+	class     string // the inside of [...], "" for other kinds
+	lit       rune
+}
+
+func globTokens(s string) []globTok {
+	var out []globTok
+	rs := []rune(s)
+	for i := 0; i < len(rs); i++ {
+		switch c := rs[i]; c {
+		case '*':
+			if len(out) == 0 || !out[len(out)-1].star {
+				out = append(out, globTok{star: true})
+			}
+		case '?':
+			out = append(out, globTok{any: true})
+		case '[':
+			end := i + 1
+			if end < len(rs) && (rs[end] == '!' || rs[end] == '^') {
+				end++
+			}
+			if end < len(rs) && rs[end] == ']' {
+				end++
+			}
+			for end < len(rs) && rs[end] != ']' {
+				end++
+			}
+			if end >= len(rs) {
+				out = append(out, globTok{lit: c})
+				continue
+			}
+			out = append(out, globTok{class: string(rs[i+1 : end])})
+			i = end
+		case '\\':
+			if i+1 < len(rs) {
+				i++
+			}
+			out = append(out, globTok{lit: rs[i]})
+		default:
+			out = append(out, globTok{lit: c})
+		}
+	}
+	return out
+}
+
+// globsMeet reports whether some string matches both token lists.
+func globsMeet(a, b []globTok) bool {
+	memo := map[[2]int]bool{}
+	var meet func(i, j int) bool
+	meet = func(i, j int) bool {
+		key := [2]int{i, j}
+		if v, ok := memo[key]; ok {
+			return v
+		}
+		var ok bool
+		switch {
+		case i == len(a) && j == len(b):
+			ok = true
+		case i < len(a) && a[i].star && meet(i+1, j), j < len(b) && b[j].star && meet(i, j+1):
+			ok = true
+		case i < len(a) && j < len(b):
+			switch {
+			case a[i].star && b[j].star:
+			case a[i].star:
+				ok = meet(i, j+1) // a's star absorbs b's next character
+			case b[j].star:
+				ok = meet(i+1, j)
+			default:
+				ok = charsMeet(a[i], b[j]) && meet(i+1, j+1)
+			}
+		}
+		memo[key] = ok
+		return ok
+	}
+	return meet(0, 0)
+}
+
+func charsMeet(x, y globTok) bool {
+	switch {
+	case x.any || y.any, x.class != "" && y.class != "":
+		return true
+	case x.class != "":
+		return classHas(x.class, y.lit)
+	case y.class != "":
+		return classHas(y.class, x.lit)
+	}
+	return x.lit == y.lit
+}
+
+func classHas(class string, r rune) bool {
+	if strings.HasPrefix(class, "!") {
+		class = "^" + class[1:]
+	}
+	ok, err := filepath.Match("["+class+"]", string(r))
+	return err != nil || ok
 }

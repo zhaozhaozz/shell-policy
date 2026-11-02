@@ -157,3 +157,44 @@ func TestResolverSensitivePaths(t *testing.T) {
 		t.Error("ValidSensitivePattern mismatch")
 	}
 }
+
+func TestGlobMayHit(t *testing.T) {
+	cases := []struct {
+		pattern, glob string
+		want          bool
+	}{
+		{"*.key", "/repo/*", true},            // cat * may read demo.key
+		{".env", "/repo/*", false},            // * skips dot files
+		{".env", "/repo/.*", true},            // .* does not
+		{".env.*", "/repo/.e*", true},         //
+		{"*.key", "/repo/*.md", false},        // literal suffixes differ
+		{"secret*", "/repo/*.md", true},       // secrets.md
+		{"id_rsa", "/home/u/.ssh/id_*", true}, //
+		{".ssh/", "/home/u/*/id_rsa", false},  // * cannot be .ssh
+		{".ssh/", "/home/u/.*/id_rsa", true},  //
+		{".ssh/", "/home/u/.s?h/x", true},     //
+		{"*.pem", "/repo/**/*.pem", true},     //
+		{"*.pem", "/repo/src/*.go", false},    //
+		{".git/hooks/", "/repo/.git/*", true}, // a hook under .git/hooks is hit via the dir component
+		{".kube/config", "/home/u/.kube/c*", true},
+		{"*.sqlite", "/data/*.[sd]*", true},   // user pattern, char class
+		{"*.sqlite", "/data/[xy]*.db", false}, //
+		{"/etc/app/secrets/", "/etc/app/*/token", true},
+		{"/etc/app/secrets/", "/srv/*/token", false}, // anchored elsewhere
+		{"~/.aws/", "/home/u/.aws/*", true},
+	}
+	for _, c := range cases {
+		if got := GlobMayHit(c.pattern, c.glob, "/home/u"); got != c.want {
+			t.Errorf("GlobMayHit(%q, %q) = %v, want %v", c.pattern, c.glob, got, c.want)
+		}
+	}
+	r := &Resolver{Cwd: "/repo", Home: "/home/u", WorkspaceRoots: []string{"/repo"}}
+	for raw, want := range map[string]bool{"*": true, "*.go": true, "docs/*.png": true, "*.[ch]": true, "src/main.[ch]": false, "README.md": false} {
+		if got := r.ResolveString(raw).SecretPossible; got != want {
+			t.Errorf("Resolve(%q).SecretPossible = %v, want %v", raw, got, want)
+		}
+	}
+	if np := r.ResolveString("*.key"); !np.SecretCandidate || np.SecretPossible {
+		t.Errorf("*.key names a secret outright: %+v", np)
+	}
+}

@@ -242,6 +242,7 @@ not: { ... }   # 取反
 | `operation.dynamic`           | bool     | 该操作目标是否动态                              |
 | `path.scope`                  | string   | 当前匹配单元的路径范围，见第 7 节               |
 | `path.secretCandidate`        | bool     | 是否疑似敏感文件（.env / id_rsa / 凭证等）      |
+| `path.secretPossible`         | bool     | 读取范围不确定、可能读到敏感文件：递归搜索的起点，或可能展开到敏感文件名的 glob（`ls` / `stat` 不设）|
 | `path.writable`               | bool     | 操作的**所有**路径是否都在可写白名单内          |
 | `path.absolute`               | string   | 当前路径的绝对形式（工作目录未知或 glob 时不存在）|
 | `path.normalized` / `path.raw` | string  | 规范化后的路径 / 命令里的原始写法，配合 `regex` |

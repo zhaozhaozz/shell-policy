@@ -26,6 +26,8 @@ policy:
 #   ask_write_outside_writable   write, delete, chmod outside writableDirs
 #   deny_destructive             rm -rf on system paths, git push -f, mkfs ...
 #   ask_sensitive_read           reading .env, private keys, credentials
+#   ask_broad_read               grep -r / rg searches and globs such as cat *
+#                                that may reach sensitive files unseen
 #   deny_secret_exfiltration     sending secret-like data over the network
 #   ask_network                  curl / wget / git fetch ...
 #   ask_remote                   ssh, docker exec / run, kubectl exec
@@ -57,6 +59,9 @@ actions:
   ask_sensitive_read:
     effectiveAction: "ask"
     severity: 70
+  ask_broad_read:
+    effectiveAction: "ask"
+    severity: 55
   ask_network:
     effectiveAction: "ask"
     severity: 60
@@ -461,6 +466,8 @@ rules:
             in: ["file_read", "file_list", "file_read_metadata"]
         - path.scope:
             in: ["inside_workspace", "tmp"]
+        - path.secretPossible:
+            equals: false
         - command.hasDynamicArgs:
             equals: false
         - command.hasAssignments:
@@ -552,6 +559,37 @@ rules:
             in: ["file_read", "file_read_metadata"]
     action: "ask_sensitive_read"
     reason: "Reading a secret-like file requires approval"
+    terminal: false
+
+  # The same reads as allow-bash-readonly, except that the files read are
+  # not statically known: a recursive search (grep -r, rg) or a glob that
+  # can expand to a secret-like name (cat * may read demo.key). Its own
+  # category, so it can be allowed without allowing sensitive reads.
+  - id: "ask-broad-read"
+    mode: "decide"
+    order: 6005
+    match:
+      all:
+        - command.program:
+            in: ["cat", "head", "tail", "grep", "egrep", "fgrep", "rg"]
+        - operation.type:
+            equals: "file_read"
+        - path.secretPossible:
+            equals: true
+        - path.scope:
+            in: ["inside_workspace", "tmp"]
+        - command.hasDynamicArgs:
+            equals: false
+        - command.hasAssignments:
+            equals: false
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
+    action: "ask_broad_read"
+    reason: "The read may reach sensitive files the command does not name (recursive search or broad glob)"
     terminal: false
 
   - id: "ask-network-write"
