@@ -180,7 +180,7 @@ rules:
 - `effectiveAction`：最终归类，只能是 `allow` / `ask` / `deny`。
 - `severity`：同一 `effectiveAction` 内部排序用，越大越优先。
 
-聚合规则：跨所有 leaf，先按 `deny > ask > allow`，同级再按 `severity` 取高者。
+聚合规则：跨所有 leaf，先按 `deny > ask > allow`，同级再按 `severity` 取高者。同一 leaf 上命中多条非 terminal 的 deny / ask 规则时也按这个顺序取最强者，之后命中的 allow 不会覆盖它。规则链跑完仍无决策的 leaf 使用 `defaultAction`。
 
 ### Rule（规则）
 | 字段       | 说明                                                                 |
@@ -346,7 +346,9 @@ not: { ... }   # 取反
   真实命令才是 leaf。上下文标志（`inRemoteCommand`/`inContainerCommand`/
   `privilegeEscalated`）会从外层传递到内层 leaf。
 - **多 leaf 命令**：`a && b`、`a | b`、`a; b` 会产生多个 leaf。决策按
-  `deny > ask > allow` 聚合；只要任一分支危险，整体就不会 allow。
+  `deny > ask > allow` 聚合；只要任一分支危险，整体就不会 allow。任一 leaf
+  没有被规则决定时按 `defaultAction` 处理。跨 leaf 合并阶段（把所有 leaf 的
+  tag 合在一起再跑一遍）只跑 deny / ask 规则，并跳过 `match: {}` 的兜底规则。
 - **单个 leaf 有多个操作或路径**：规则按「(操作, 路径) 单元」匹配。deny / ask
   只要任一单元命中就生效；allow 只放行它命中的单元，剩下的单元继续匹配后续规则，
   全部放行后 leaf 才是 allow。写 allow 规则时不要指望「顺带」放行同一命令的其他

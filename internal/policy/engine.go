@@ -65,10 +65,12 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 	}
 	res.Operations = allOps
 
-	// Cross-leaf pass: re-run decide rules against a synthetic leaf
-	// whose tags/risk are the union of all leaves' so cross-cutting
-	// rules (e.g. secret_candidate + network_write) can fire even when
-	// the contributing operations live on different leaves.
+	// Cross-leaf pass: re-run deny/ask rules against a synthetic leaf whose
+	// tags/risk are the union of all leaves' so cross-cutting rules (e.g.
+	// secret_candidate + network_write) can fire even when the contributing
+	// operations live on different leaves. The synthetic leaf has no command,
+	// operation or path, so allow rules and catch-all rules (empty match)
+	// are skipped: they would decide every multi-leaf command.
 	if len(leaves) > 1 {
 		merged := &LeafEvaluation{
 			Command:   root,
@@ -76,7 +78,11 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 			RiskScore: res.RiskScore,
 		}
 		for _, r := range e.Policy.Rules {
-			if !r.IsEnabled() || r.Mode != ModeDecide {
+			if !r.IsEnabled() || r.Mode != ModeDecide || len(r.Match) == 0 {
+				continue
+			}
+			act, ok := e.Policy.Actions[r.Action]
+			if !ok || act.EffectiveAction == EffectAllow {
 				continue
 			}
 			matched, err := r.Match.Eval(merged)
@@ -86,17 +92,13 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 			if !matched {
 				continue
 			}
-			act, ok := e.Policy.Actions[r.Action]
-			if !ok {
-				continue
-			}
-			merged.Decision = &CandidateAction{
+			merged.Decision = stronger(merged.Decision, &CandidateAction{
 				ActionName:      act.Name,
 				EffectiveAction: act.EffectiveAction,
 				Severity:        act.Severity,
 				SourceRuleID:    r.ID,
 				Reason:          r.Reason,
-			}
+			})
 			res.MatchedRules = append(res.MatchedRules, MatchedRule{
 				RuleID: r.ID, Mode: r.Mode, Action: r.Action,
 				Reason: r.Reason, Terminal: r.IsTerminal(),
@@ -135,6 +137,13 @@ func (e *Engine) effective(name string) EffectiveAction {
 		return a.EffectiveAction
 	}
 	return EffectAsk
+}
+
+func (e *Engine) severity(name string) int {
+	if a, ok := e.Policy.Actions[name]; ok {
+		return a.Severity
+	}
+	return severityFor(EffectAsk)
 }
 
 // evaluateLeaf runs the rule chain over one leaf, matching rules per
@@ -192,8 +201,10 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 				le.AuditNotes = append(le.AuditNotes, r.Effects.AddAuditNote)
 			}
 		}
-		// Decide rules set the candidate decision; an allow decides the leaf
-		// only once it has no uncleared units left.
+		// Decide rules set the candidate decision. An ask/deny keeps the
+		// strongest one seen so far, so a non-terminal ask is never weakened
+		// by a later rule. An allow decides the leaf only once it has no
+		// uncleared units left and nothing stronger was decided.
 		if decide {
 			cand := &CandidateAction{
 				ActionName:      act.Name,
@@ -212,11 +223,11 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 				if open > 0 {
 					mr.Partial = true
 					mr.Terminal = false
-				} else {
+				} else if le.Decision == nil {
 					le.Decision = cand
 				}
 			} else {
-				le.Decision = cand
+				le.Decision = stronger(le.Decision, cand)
 			}
 		}
 		le.MatchedRules = append(le.MatchedRules, mr)
@@ -229,49 +240,60 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 			break
 		}
 	}
-	// Only part of the leaf was allowed and nothing decided the rest: use the
-	// default action so that another leaf's allow cannot carry it either.
-	if le.Decision == nil && open < len(units) {
+	// No rule decided the leaf (or an allow cleared only part of it): use the
+	// default action, so that another leaf's allow cannot carry it.
+	if le.Decision == nil {
 		def := e.Policy.DefaultAction
+		reason := "no rule matched; default action applied"
+		if open < len(units) {
+			reason = "only part of the command matched an allow rule; default action applied"
+		}
 		le.Decision = &CandidateAction{
 			ActionName:      def,
 			EffectiveAction: e.effective(def),
-			Reason:          "only part of the command matched an allow rule; default action applied",
+			Severity:        e.severity(def),
+			Reason:          reason,
 		}
 	}
 	return le, nil
 }
 
+// stronger returns the stronger of two candidate decisions: deny > ask >
+// allow, then higher severity; ties keep the earlier one.
+func stronger(cur, cand *CandidateAction) *CandidateAction {
+	if cur == nil {
+		return cand
+	}
+	if r1, r2 := rank(cur.EffectiveAction), rank(cand.EffectiveAction); r2 != r1 {
+		if r2 > r1 {
+			return cand
+		}
+		return cur
+	}
+	if cand.Severity > cur.Severity {
+		return cand
+	}
+	return cur
+}
+
+func rank(a EffectiveAction) int {
+	switch a {
+	case EffectDeny:
+		return 3
+	case EffectAsk:
+		return 2
+	case EffectAllow:
+		return 1
+	}
+	return 0
+}
+
 // chooseFinal aggregates per-leaf decisions: deny > ask > allow.
 func (e *Engine) chooseFinal(leaves []LeafEvaluation) *CandidateAction {
 	var best *CandidateAction
-	rank := func(a EffectiveAction) int {
-		switch a {
-		case EffectDeny:
-			return 3
-		case EffectAsk:
-			return 2
-		case EffectAllow:
-			return 1
-		}
-		return 0
-	}
 	for i := range leaves {
-		d := leaves[i].Decision
-		if d == nil {
-			continue
-		}
-		if best == nil {
-			best = d
-			continue
-		}
-		bRank, dRank := rank(best.EffectiveAction), rank(d.EffectiveAction)
-		if dRank > bRank {
-			best = d
-			continue
-		}
-		if dRank == bRank && d.Severity > best.Severity {
-			best = d
+		if d := leaves[i].Decision; d != nil {
+			best = stronger(best, d)
 		}
 	}
 	return best

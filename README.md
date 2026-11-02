@@ -278,6 +278,10 @@ rules:
 规则按 `order` 升序执行；命中一条 terminal 规则即停止。每条 leaf 命令独立评估，
 整条命令的最终决策用 `deny > ask > allow` 聚合。
 
+- 同一 leaf 上命中多条 deny / ask 规则（前面的是 `terminal: false`）时取最强的一条：deny 优先于 ask，同级取 `severity` 高者；之后命中的 allow 不会削弱已有的 ask / deny。
+- 规则链跑完仍没有决策的 leaf 使用 `defaultAction`，不会因为同一命令里另一个 leaf 被放行而被忽略：`cat a && make` 的 `make` 按默认动作处理。
+- 跨 leaf 合并只重跑 deny / ask 规则，并跳过 `match: {}` 这类兜底规则，所以 `cat a && cat b` 这样每段都被放行的组合命令仍然是 allow。
+
 leaf 内按「(操作, 路径) 单元」匹配：`enrich` / `audit` 规则和 deny / ask 决策
 只要任一单元命中就生效；allow 规则只放行它命中的单元，其余单元继续往下匹配，
 所有单元都被放行后 leaf 才是 allow。因此 `cat README.md > ~/.bashrc` 里对
