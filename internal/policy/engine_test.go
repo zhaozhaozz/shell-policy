@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/self/shell_permission/internal/analyze"
@@ -102,5 +103,12 @@ func TestSensitivePathsLoadAndValidate(t *testing.T) {
 	}
 	if _, err := Load([]byte("policy:\n  id: p\n  sensitivePaths: [\"[\"]\n")); err == nil {
 		t.Fatal("an invalid glob should be rejected")
+	}
+}
+
+func TestEmptyActionIsAnError(t *testing.T) {
+	_, err := Load([]byte("policy:\n  id: p\nactions:\n  broken: null\n  also_broken:\n"))
+	if err == nil || !strings.Contains(err.Error(), "has no definition") {
+		t.Fatalf("err = %v", err)
 	}
 }

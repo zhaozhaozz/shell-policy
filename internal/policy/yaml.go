@@ -54,6 +54,10 @@ func Load(data []byte) (*Policy, error) {
 		}
 	}
 	for name, a := range raw.Actions {
+		if a == nil {
+			// `name:` with no body: report it instead of dereferencing nil.
+			return nil, fmt.Errorf("policy invalid: action %q has no definition (needs effectiveAction)", name)
+		}
 		ac := *a
 		ac.Name = name
 		if ac.Severity == 0 {
