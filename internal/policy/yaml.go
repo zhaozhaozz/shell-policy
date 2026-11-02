@@ -1,7 +1,10 @@
 package policy
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -18,8 +21,12 @@ func LoadFromFile(path string) (*Policy, error) {
 
 // Load decodes YAML/JSON-compatible bytes into a Policy.
 func Load(data []byte) (*Policy, error) {
+	// Unknown keys are rejected so a typo (defaultAcion, effect) is
+	// reported instead of being ignored.
 	var raw rawPolicyDoc
-	if err := yaml.Unmarshal(data, &raw); err != nil {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+	if err := dec.Decode(&raw); err != nil && !errors.Is(err, io.EOF) {
 		return nil, err
 	}
 	p := &Policy{

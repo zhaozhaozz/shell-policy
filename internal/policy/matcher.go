@@ -564,3 +564,92 @@ func numCompare(a, b any, op string) (bool, error) {
 	}
 	return false, fmt.Errorf("bad op %q", op)
 }
+
+// knownFields are the exact field names lookupField understands; argv[N],
+// flags.<name> and flags["--name"] are accepted by prefix.
+var knownFields = map[string]bool{
+	"tags": true, "riskScore": true, "argv": true,
+	"command.program": true, "command.subcommand": true, "command.subcommandString": true,
+	"command.hasDynamicArgs": true, "command.wrapperType": true,
+	"operation.type": true, "operation.target": true, "operation.dynamic": true,
+	"path.scope": true, "path.secretCandidate": true, "path.writable": true, "path.absolute": true,
+	"path.normalized": true, "path.normalizedRegex": true, "path.raw": true, "path.rawRegex": true,
+	"context.inPipeline": true, "context.inSubshell": true, "context.inCommandSubstitution": true,
+	"context.inRemoteCommand": true, "context.remoteHost": true, "context.inContainerCommand": true,
+	"context.privilegeEscalated": true, "context.inFunction": true, "context.background": true,
+}
+
+var knownOps = map[string]bool{
+	"exists": true, "equals": true, "notEquals": true, "in": true, "notIn": true,
+	"contains": true, "containsAll": true, "containsAny": true, "regex": true, "prefix": true,
+	"greaterThanOrEqual": true, "greaterThan": true, "lessThanOrEqual": true, "lessThan": true,
+}
+
+// Validate checks field names, operators and regexes so a typo fails when
+// the policy is loaded instead of silently never matching.
+func (m Matcher) Validate() error {
+	return validateNode(map[string]any(m))
+}
+
+func validateNode(m map[string]any) error {
+	for key, v := range m {
+		switch key {
+		case "all", "any":
+			list, ok := v.([]any)
+			if !ok {
+				return fmt.Errorf("%q expects a list", key)
+			}
+			for _, item := range list {
+				sub, ok := asMap(item)
+				if !ok {
+					return fmt.Errorf("%q items must be matchers", key)
+				}
+				if err := validateNode(sub); err != nil {
+					return err
+				}
+			}
+			continue
+		case "not":
+			sub, ok := asMap(v)
+			if !ok {
+				return fmt.Errorf("%q expects a matcher", key)
+			}
+			if err := validateNode(sub); err != nil {
+				return err
+			}
+			continue
+		}
+		if !knownFields[key] && !strings.HasPrefix(key, "argv[") && !strings.HasPrefix(key, "flags.") && !strings.HasPrefix(key, "flags[") {
+			return fmt.Errorf("unknown field %q", key)
+		}
+		cond, ok := asMap(v)
+		if !ok {
+			continue // shorthand: field: value
+		}
+		for op, want := range cond {
+			if !knownOps[op] {
+				return fmt.Errorf("field %q: unknown operator %q", key, op)
+			}
+			if op == "regex" {
+				pattern, ok := want.(string)
+				if !ok {
+					return fmt.Errorf("field %q: regex expects a string", key)
+				}
+				if _, err := regexp.Compile(pattern); err != nil {
+					return fmt.Errorf("field %q: %v", key, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func asMap(v any) (map[string]any, bool) {
+	switch m := v.(type) {
+	case map[string]any:
+		return m, true
+	case Matcher:
+		return map[string]any(m), true
+	}
+	return nil, false
+}

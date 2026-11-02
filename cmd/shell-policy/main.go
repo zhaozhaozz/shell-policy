@@ -32,6 +32,7 @@ import (
 	"github.com/self/shell_permission/internal/parser"
 	"github.com/self/shell_permission/internal/paths"
 	"github.com/self/shell_permission/internal/policy"
+	"github.com/self/shell_permission/policies"
 )
 
 func main() {
@@ -76,7 +77,8 @@ Commands:
                on stdin and emit an allow/deny decision on stdout.
 
 Common flags:
-  --policy <file>          Path to policy YAML (default: policies/default.yaml).
+  --policy <file>          Path to policy YAML (default: policies/default.yaml,
+                           or the built-in default when that file is absent).
   --cwd <path>             Working directory for path normalization (default: $PWD).
   --workspace <path>       Workspace root (repeatable). Default: cwd.
   --writable <path>        Writable directory root (repeatable). Ordinary
@@ -155,7 +157,8 @@ func (cf *commonFlags) loadPolicy() (*policy.Policy, error) {
 			}
 		}
 		if path == "" {
-			return nil, fmt.Errorf("no policy file found; pass --policy")
+			// Fall back to the built-in default policy.
+			return policy.Load(policies.DefaultYAML)
 		}
 	}
 	return policy.LoadFromFile(path)

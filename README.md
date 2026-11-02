@@ -63,6 +63,10 @@ go build -o bin/shell-policy ./cmd/shell-policy
 
 命令文本可作为位置参数传入，也可从 stdin 读取。
 
+## 作为 Go 库使用
+
+其他 Go module（例如 ShellGate）通过公共包 `github.com/self/shell_permission/shellpolicy` 使用引擎：`Parse` / `Default` 加载并校验规则文件（未知字段、未知匹配字段 / 操作符、错误正则都会报错），`WithEffects` 按类别切换允许 / 询问 / 拒绝，`Evaluate` 按每次调用的 `Env`（当前目录、HOME、可写目录、追加敏感路径）判定并返回 explain trace。内置默认策略已嵌入二进制（`policies.DefaultYAML`），CLI 找不到 `policies/default.yaml` 时也会使用它。用法见 [docs/AUTHORING_RULES.md](docs/AUTHORING_RULES.md) 第 3 节。
+
 ## 子命令
 
 | 子命令 | 作用 |
@@ -421,16 +425,20 @@ internal/
   ir/                 IR 类型（Command / ResourceOp / NormalizedPath / Context）
   argv/               通用 argv / flag 解析
   analyze/            wrapper 检测、command spec、资源操作抽取
-    spec_coreutils.go   coreutils + curl/wget 的 spec
+    spec_coreutils.go   coreutils + curl/wget/dd 的 spec
     spec_git_docker.go  git / docker(podman) 的 spec
-    wrappers.go         sudo/env/bash -c/ssh/docker/kubectl/find -exec/xargs ...
+    spec_shell.go       shell 内建命令与 shell_config（PATH、alias、trap ...）
+    spec_packages.go    包管理器（package_install）
+    cwd.go              cd / pushd 的工作目录跟踪
+    wrappers.go         sudo/doas/su/env/eval/bash -c/ssh/docker/kubectl/find -exec/xargs ...
   paths/              路径规范化、scope 分类、secret/writable 检测
   audit/              审计 JSONL 记录 + 可调级别诊断日志（log/slog）
   policy/             规则链引擎（matcher / engine / yaml 加载）
   hooks/
     claudehook/       Claude Code hook 协议适配
     codexhook/        Codex CLI hook 协议适配
-policies/default.yaml 默认策略与规则链
+shellpolicy/           公共 Go API（Parse / WithEffects / Evaluate），供其他 module 导入
+policies/default.yaml 默认策略与规则链（policies/embed.go 把它嵌入二进制）
 docs/AUTHORING_RULES.md  面向 AI / agent 的使用与规则编写指南
 plan.md               完整设计蓝图
 ```

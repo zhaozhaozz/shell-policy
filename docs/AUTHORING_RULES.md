@@ -94,57 +94,44 @@ echo 'cat /etc/passwd' | ./bin/shell-policy eval --cwd "$PWD"
 
 ## 3. 作为 Go 库使用
 
-模块路径：`github.com/self/shell_permission`。
+模块路径：`github.com/self/shell_permission`。其他 module 只能导入公共包 `shellpolicy`（引擎都在 `internal/` 下）：
 
 ```go
-import (
-    "fmt"
+import "github.com/self/shell_permission/shellpolicy"
 
-    "github.com/self/shell_permission/internal/analyze"
-    "github.com/self/shell_permission/internal/audit"
-    "github.com/self/shell_permission/internal/paths"
-    "github.com/self/shell_permission/internal/policy"
-)
-
-func decide(command, cwd string) error {
-    // 1. 加载策略
-    pol, err := policy.LoadFromFile("policies/default.yaml")
+func decide(ruleFile []byte, command, cwd, home string) (*shellpolicy.Result, error) {
+    // 1. 规则文件：自定义 YAML，或用内置默认策略 shellpolicy.Default()
+    pol, err := shellpolicy.Parse(ruleFile) // 校验失败会返回具体原因
     if err != nil {
-        return err
+        return nil, err
     }
 
-    // 2. 配置路径解析器（决定 scope / writable）
-    rsv := &paths.Resolver{
+    // 2. 可选：按类别切换效果（不改规则）
+    pol, err = pol.WithEffects(map[string]shellpolicy.Effect{
+        "ask_privilege": shellpolicy.Deny,
+        "default":       shellpolicy.Allow,
+    })
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. 每次调用的环境：当前目录（空 = 未知）、HOME、可写目录、追加的敏感路径
+    return pol.Evaluate(command, shellpolicy.Env{
         Cwd:            cwd,
-        WorkspaceRoots: []string{cwd},
-        WritableRoots:  append([]string(nil), pol.WritableDirs...),
-    }
-
-    // 3. 解析 + 分析
-    pr, err := analyze.AnalyzeText(command, rsv)
-    if err != nil {
-        return err // 解析失败：按你的策略当作 deny 处理
-    }
-
-    // 4. 评估（可选注入诊断日志）
-    eng := policy.New(pol).WithLogger(audit.NewLogger(nil, "off"))
-    res, err := eng.Evaluate(pr.Command)
-    if err != nil {
-        return err
-    }
-
-    fmt.Println(res.Decision, res.EffectiveDecision, res.RiskScore)
-    return nil
+        Home:           home,
+        WritableDirs:   []string{cwd},
+        SensitivePaths: []string{"~/.aws/"},
+    })
 }
 ```
 
 要点：
-- `analyze.AnalyzeText(command, resolver)` 一步完成解析与分析，返回 `*parser.ParseResult`。
-- `policy.New(pol)` 得到引擎；`.WithLogger(...)` 可选，注入 `*slog.Logger`。
-- `eng.Evaluate(root)` 返回 `*policy.Result`，关键字段：
-  `Decision`（命中规则的动作名）、`EffectiveDecision`（`allow`/`ask`/`deny`）、
-  `Reason`、`RiskScore`、`Tags`、`AuditNotes`、`MatchedRules`、`Operations`、`PerLeaf`。
-- 想记录审计：构造 `audit.NewWriter(w)` 后调用 `Write(audit.Record{...})`。
+- `Result` 的关键字段：`Effect`（`allow` / `ask` / `deny`）、`Action`（决定结果的具名 action，没有规则决定时是默认 action）、`RuleID`、`Reason`、`Steps`（explain trace：每条命中规则、所在的子命令、是否 partial）、`Operations`（识别出的操作和路径分类）。
+- 命令无法解析时 `Evaluate` 返回 error，调用方应至少按 ask 处理，不要放行。
+- `WithEffects` 的语义：设为 ask / deny 时，使用该 action 的规则都询问 / 拒绝；把 deny / ask 类 action 设为 allow 时，这些规则被停用，该类别不再询问或拒绝，由其余规则继续判定（不会把这些规则匹配到的命令一律放行）；默认 action 按字面生效。
+- `Env.WorkspaceRoots` 为空时使用 `WritableDirs`；策略文件里的 `writableDirs`、`sensitivePaths` 会叠加到 `Env` 上。
+- `shellpolicy.DefaultYAML()` 返回内置默认策略原文，可作为「恢复默认」的内容。
+- 同一模块内部也可以直接使用 `internal/analyze`、`internal/policy` 等包（CLI 就是这样做的）。
 
 ---
 

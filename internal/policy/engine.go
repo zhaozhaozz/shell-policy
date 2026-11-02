@@ -116,6 +116,7 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 	chosen := e.chooseFinal(res.PerLeaf)
 	if chosen != nil {
 		res.Decision = chosen.ActionName
+		res.RuleID = chosen.SourceRuleID
 		res.EffectiveDecision = chosen.EffectiveAction
 		res.Reason = chosen.Reason
 	} else {

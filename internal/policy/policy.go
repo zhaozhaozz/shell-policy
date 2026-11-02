@@ -145,6 +145,9 @@ func (p *Policy) Validate() []error {
 		if r.Mode != ModeEnrich && r.Mode != ModeDecide && r.Mode != ModeAudit {
 			errs = append(errs, fmt.Errorf("rule %q invalid mode %q", r.ID, r.Mode))
 		}
+		if err := r.Match.Validate(); err != nil {
+			errs = append(errs, fmt.Errorf("rule %q: %v", r.ID, err))
+		}
 		if r.Mode == ModeDecide {
 			if r.Action == "" {
 				errs = append(errs, fmt.Errorf("decide rule %q missing action", r.ID))
@@ -214,7 +217,10 @@ type LeafEvaluation struct {
 
 // Result is the aggregated outcome for a whole command tree.
 type Result struct {
-	Decision          string           `json:"decision"`
+	Decision string `json:"decision"`
+	// RuleID is the rule behind Decision; empty when the default action
+	// applied.
+	RuleID            string           `json:"ruleId,omitempty"`
 	EffectiveDecision EffectiveAction  `json:"effectiveDecision"`
 	Reason            string           `json:"reason,omitempty"`
 	RiskScore         int              `json:"riskScore"`
