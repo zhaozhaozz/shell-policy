@@ -360,6 +360,19 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
 - 该规则的 `order` 在所有「硬 deny」规则之后，因此 `rm -rf /etc` 这类危险命令
   仍会被先行拦截。
 
+### 工作目录跟踪（`cd` / `pushd`）
+
+相对路径按命令执行到该处时的工作目录解析，而不是固定按 `--cwd`：
+`cd /etc && rm -f passwd` 里的 `passwd` 解析为 `/etc/passwd`，不会被当成可写目录内的删除放行。
+
+- `cd dir && …` 之后按 `dir` 解析；`cd` 无参数或 `cd ~/x` 按 HOME 解析；`pushd dir` 同 `cd`，`pushd -n` 不切换目录。
+- 目录无法静态确定时，之后的相对路径 scope 为 `unknown`、不可写，写操作不会自动放行：`cd "$X"`、`cd -`、`cd ~user`、`popd`、无参数或 `+N` 的 `pushd`、`source` / `.` / `eval`、动态程序名，以及可能失败的 `cd`（`cd dir; rm x` 中 cd 失败时 rm 仍在原目录执行）。
+- 子 shell、管道（zsh 的管道最后一段除外）、后台任务、`bash -c` 等子进程里的 `cd` 不影响后续命令；`command cd`、`builtin cd` 会影响。
+- 循环和条件语句内出现 `cd` 时，整个语句及其后的相对路径都按未知处理（循环体会在 `cd` 之后再次执行）。
+- `sudo -D dir` / `env -C dir` 让内层命令从 `dir` 开始解析；`find -execdir`、`ssh`、`docker exec` 等的内层命令目录未知。
+- 库调用方传入空的 `Resolver.Cwd` 表示工作目录未知，相对路径同样按 `unknown` 处理。
+- 已知限制：`CDPATH` 会改变相对目标的解析，引擎不感知；会话里已定义的同名函数 / alias 也不在静态分析范围内。
+
 ## 仓库结构
 
 ```text

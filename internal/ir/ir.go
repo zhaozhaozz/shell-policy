@@ -74,44 +74,49 @@ type SimpleCommand struct {
 	Assignments []Assignment `json:"assignments,omitempty"`
 
 	// Filled by later phases.
-	NormalizedProgram string             `json:"normalizedProgram,omitempty"`
-	Wrapper           *WrapperInfo       `json:"wrapper,omitempty"`
-	Operations        []ResourceOp       `json:"operations,omitempty"`
-	Subcommand        []string           `json:"subcommand,omitempty"`
-	Flags             map[string]any     `json:"flags,omitempty"`
-	HasDynamicArgs    bool               `json:"hasDynamicArgs,omitempty"`
+	NormalizedProgram string         `json:"normalizedProgram,omitempty"`
+	Wrapper           *WrapperInfo   `json:"wrapper,omitempty"`
+	Operations        []ResourceOp   `json:"operations,omitempty"`
+	Subcommand        []string       `json:"subcommand,omitempty"`
+	Flags             map[string]any `json:"flags,omitempty"`
+	HasDynamicArgs    bool           `json:"hasDynamicArgs,omitempty"`
 }
 
 // Context is the contextual / propagated information attached to every node.
 type Context struct {
-	Depth                  int    `json:"depth"`
-	InPipeline             bool   `json:"inPipeline,omitempty"`
-	InSubshell             bool   `json:"inSubshell,omitempty"`
-	InCommandSubstitution  bool   `json:"inCommandSubstitution,omitempty"`
-	InProcessSubstitution  bool   `json:"inProcessSubstitution,omitempty"`
-	InRemoteCommand        bool   `json:"inRemoteCommand,omitempty"`
-	RemoteHost             string `json:"remoteHost,omitempty"`
-	InContainerCommand     bool   `json:"inContainerCommand,omitempty"`
-	ContainerName          string `json:"containerName,omitempty"`
-	ContainerImage         string `json:"containerImage,omitempty"`
-	PrivilegeEscalated     bool   `json:"privilegeEscalated,omitempty"`
-	Background             bool   `json:"background,omitempty"`
+	Depth                 int    `json:"depth"`
+	InPipeline            bool   `json:"inPipeline,omitempty"`
+	InSubshell            bool   `json:"inSubshell,omitempty"`
+	InCommandSubstitution bool   `json:"inCommandSubstitution,omitempty"`
+	InProcessSubstitution bool   `json:"inProcessSubstitution,omitempty"`
+	InRemoteCommand       bool   `json:"inRemoteCommand,omitempty"`
+	RemoteHost            string `json:"remoteHost,omitempty"`
+	InContainerCommand    bool   `json:"inContainerCommand,omitempty"`
+	ContainerName         string `json:"containerName,omitempty"`
+	ContainerImage        string `json:"containerImage,omitempty"`
+	PrivilegeEscalated    bool   `json:"privilegeEscalated,omitempty"`
+	Background            bool   `json:"background,omitempty"`
 }
 
 // WrapperInfo records that a simple command is a known wrapper that
 // nests an inner command (e.g. bash -c, ssh, docker exec).
 type WrapperInfo struct {
-	Type           string            `json:"type"`
-	Outer          string            `json:"outer"`
-	InnerText      string            `json:"innerText,omitempty"`
-	InnerCommand   *Command          `json:"innerCommand,omitempty"`
-	Host           string            `json:"host,omitempty"`
-	User           string            `json:"user,omitempty"`
-	Container      string            `json:"container,omitempty"`
-	Image          string            `json:"image,omitempty"`
-	Namespace      string            `json:"namespace,omitempty"`
-	Privilege      bool              `json:"privilege,omitempty"`
-	Env            map[string]string `json:"env,omitempty"`
+	Type         string   `json:"type"`
+	Outer        string   `json:"outer"`
+	InnerText    string   `json:"innerText,omitempty"`
+	InnerCommand *Command `json:"innerCommand,omitempty"`
+	Host         string   `json:"host,omitempty"`
+	User         string   `json:"user,omitempty"`
+	Container    string   `json:"container,omitempty"`
+	Image        string   `json:"image,omitempty"`
+	Namespace    string   `json:"namespace,omitempty"`
+	Privilege    bool     `json:"privilege,omitempty"`
+	// Dir is the directory the inner command starts in when the wrapper
+	// changes it (sudo -D, env -C); DirDynamic is set when that directory
+	// cannot be determined statically (find -execdir, a dynamic -D value).
+	Dir        string            `json:"dir,omitempty"`
+	DirDynamic bool              `json:"dirDynamic,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
 }
 
 // SourceSpan locates an IR node in the original source text.

@@ -16,6 +16,9 @@ import (
 
 // Resolver normalizes raw path tokens against a workspace root.
 type Resolver struct {
+	// Cwd is the directory relative paths are resolved against. Empty means
+	// the working directory is unknown (for example after `cd "$X"`):
+	// relative paths then get scope "unknown" and are never writable.
 	Cwd            string
 	WorkspaceRoots []string
 	Home           string
@@ -108,12 +111,17 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 		np.Absolute = np.Normalized
 	default:
 		np.Kind = ir.PathWorkspaceRelative
-		base := r.Cwd
-		if base == "" {
-			base = "."
+		if r.Cwd == "" {
+			// Unknown working directory: the target cannot be located.
+			np.Normalized = filepath.Clean(val)
+			np.Scope = ir.ScopeUnknown
+			np.SecretCandidate = isSecretPath(np.Normalized) || isSecretPath(raw)
+			if np.SecretCandidate {
+				np.Scope = ir.ScopeSecretCandidate
+			}
+			return np
 		}
-		joined := filepath.Join(base, val)
-		np.Normalized = filepath.Clean(joined)
+		np.Normalized = filepath.Clean(filepath.Join(r.Cwd, val))
 		np.Absolute = np.Normalized
 	}
 
@@ -156,7 +164,7 @@ func (r *Resolver) classifyScope(abs string) ir.PathScope {
 		return ir.ScopeUnknown
 	}
 	switch {
-	case strings.HasPrefix(abs, "/tmp"), strings.HasPrefix(abs, "/var/tmp"):
+	case underDir(abs, "/tmp"), underDir(abs, "/var/tmp"):
 		return ir.ScopeTmp
 	case isSystemPath(abs):
 		return ir.ScopeSystem
@@ -177,6 +185,11 @@ func (r *Resolver) classifyScope(abs string) ir.PathScope {
 		}
 	}
 	return ir.ScopeOutsideWorkspace
+}
+
+// underDir reports whether p is dir itself or lies below it.
+func underDir(p, dir string) bool {
+	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
 func isSystemPath(p string) bool {
@@ -215,7 +228,10 @@ func globStaticPrefix(raw string, r *Resolver) string {
 	// Strip a leading ~/ so the prefix can still be anchored to HOME.
 	homePrefixed := strings.HasPrefix(raw, "~/") || raw == "~"
 	cleaned := raw
-	if homePrefixed && r.Home != "" {
+	if homePrefixed {
+		if r.Home == "" {
+			return ""
+		}
 		cleaned = filepath.Join(r.Home, strings.TrimPrefix(raw, "~"))
 	}
 	segs := strings.Split(cleaned, "/")
@@ -229,22 +245,18 @@ func globStaticPrefix(raw string, r *Resolver) string {
 	prefix := strings.Join(static, "/")
 	if prefix == "" {
 		// Leading segment was itself a glob (e.g. "*.log"); anchor to cwd.
-		if filepath.IsAbs(cleaned) {
+		if filepath.IsAbs(cleaned) || r.Cwd == "" {
 			return ""
 		}
-		if r.Cwd != "" {
-			return filepath.Clean(r.Cwd)
-		}
-		return ""
+		return filepath.Clean(r.Cwd)
 	}
 	if filepath.IsAbs(cleaned) {
 		return filepath.Clean(prefix)
 	}
-	base := r.Cwd
-	if base == "" {
-		base = "."
+	if r.Cwd == "" {
+		return ""
 	}
-	return filepath.Clean(filepath.Join(base, prefix))
+	return filepath.Clean(filepath.Join(r.Cwd, prefix))
 }
 
 func isSecretPath(p string) bool {

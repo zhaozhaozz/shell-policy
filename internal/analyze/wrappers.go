@@ -135,56 +135,65 @@ func (a *Analyzer) parseInner(text string, ctx ir.Context) *ir.Command {
 
 // --- Specific wrappers ----------------------------------------------------
 
+// sudoValueFlags consume the next word (or an attached value).
+var sudoValueFlags = map[string]bool{
+	"-u": true, "--user": true, "-g": true, "--group": true, "-h": true, "--host": true,
+	"-p": true, "--prompt": true, "-C": true, "--close-from": true, "-D": true, "--chdir": true,
+	"-r": true, "--role": true, "-t": true, "--type": true, "-U": true, "--other-user": true,
+	"-T": true, "--command-timeout": true, "-R": true, "--chroot": true,
+}
+
 func (a *Analyzer) wrapSudo(c *ir.Command) *ir.WrapperInfo {
 	args := c.Simple.Argv[1:]
-	user := ""
-	preserve := false
-	// Handle a small subset of sudo flags that consume a value.
-	for {
-		if len(args) == 0 {
-			break
-		}
+	w := &ir.WrapperInfo{Type: "sudo", Outer: "sudo", Privilege: true}
+	// Consume sudo's own options; the first non-option word starts the
+	// command. Unknown options are skipped as boolean flags so that
+	// `sudo -n rm ...` still exposes `rm`.
+	for len(args) > 0 {
 		a0 := args[0]
-		if a0.Confidence != ir.ConfStatic || !strings.HasPrefix(a0.Value, "-") {
+		if a0.Confidence != ir.ConfStatic || !strings.HasPrefix(a0.Value, "-") || a0.Value == "-" {
 			break
 		}
-		switch a0.Value {
-		case "-u", "--user":
-			if len(args) >= 2 {
-				user = args[1].Value
-				args = args[2:]
-				continue
-			}
-		case "-E", "--preserve-env":
-			preserve = true
+		if a0.Value == "--" {
 			args = args[1:]
+			break
+		}
+		name, val, hasVal := a0.Value, "", false
+		if i := strings.Index(name, "="); strings.HasPrefix(name, "--") && i > 0 {
+			name, val, hasVal = name[:i], name[i+1:], true
+		} else if !strings.HasPrefix(name, "--") && len(name) > 2 && sudoValueFlags[name[:2]] {
+			name, val, hasVal = name[:2], name[2:], true
+		}
+		args = args[1:]
+		if !sudoValueFlags[name] {
 			continue
-		case "-i", "-s":
-			args = args[1:]
-			continue
-		case "--":
+		}
+		dynamic := false
+		if !hasVal && len(args) > 0 {
+			val, dynamic = args[0].Value, args[0].Confidence != ir.ConfStatic
 			args = args[1:]
 		}
-		// Unknown sudo flag — stop consuming so we don't accidentally drop
-		// a positional that begins with `-`.
-		break
+		switch name {
+		case "-u", "--user":
+			w.User = val
+		case "-D", "--chdir", "-R", "--chroot":
+			// The command starts in another directory (or root).
+			if dynamic || name == "-R" || name == "--chroot" {
+				w.DirDynamic = true
+			} else {
+				w.Dir = val
+			}
+		}
 	}
-	_ = preserve
 	if len(args) == 0 {
-		return &ir.WrapperInfo{Type: "sudo", Outer: "sudo", Privilege: true, User: user}
+		return w
 	}
 	innerText := joinArgvText(args)
 	innerCtx := c.Context
 	innerCtx.PrivilegeEscalated = true
-	inner := a.parseInner(innerText, innerCtx)
-	return &ir.WrapperInfo{
-		Type:         "sudo",
-		Outer:        "sudo",
-		User:         user,
-		Privilege:    true,
-		InnerText:    innerText,
-		InnerCommand: inner,
-	}
+	w.InnerText = innerText
+	w.InnerCommand = a.parseInner(innerText, innerCtx)
+	return w
 }
 
 func consumeLeadingStringFlag(args []ir.ArgValue, names ...string) ([]ir.ArgValue, bool) {
@@ -233,6 +242,7 @@ func containsShortBoolFlag(value, name string) bool {
 func (a *Analyzer) wrapEnv(c *ir.Command) *ir.WrapperInfo {
 	args := c.Simple.Argv[1:]
 	env := map[string]string{}
+	chdir, chdirDynamic := "", false
 	for len(args) > 0 {
 		a0 := args[0]
 		if a0.Confidence != ir.ConfStatic {
@@ -248,6 +258,23 @@ func (a *Analyzer) wrapEnv(c *ir.Command) *ir.WrapperInfo {
 				args = args[2:]
 				continue
 			}
+		}
+		// env -C dir / --chdir=dir runs the command in another directory.
+		if a0.Value == "-C" || a0.Value == "--chdir" {
+			if len(args) >= 2 {
+				if args[1].Confidence == ir.ConfStatic {
+					chdir = args[1].Value
+				} else {
+					chdirDynamic = true
+				}
+				args = args[2:]
+				continue
+			}
+		}
+		if v, ok := strings.CutPrefix(a0.Value, "--chdir="); ok {
+			chdir = v
+			args = args[1:]
+			continue
 		}
 		if strings.HasPrefix(a0.Value, "-") {
 			break
@@ -270,6 +297,8 @@ func (a *Analyzer) wrapEnv(c *ir.Command) *ir.WrapperInfo {
 		Env:          env,
 		InnerText:    innerText,
 		InnerCommand: inner,
+		Dir:          chdir,
+		DirDynamic:   chdirDynamic,
 	}
 }
 
@@ -525,9 +554,11 @@ func (a *Analyzer) wrapFindExec(c *ir.Command) *ir.WrapperInfo {
 			inner := a.parseInner(innerText, c.Context)
 			return &ir.WrapperInfo{
 				Type:         "find_exec",
-				Outer:        "find -exec",
+				Outer:        "find " + v,
 				InnerText:    innerText,
 				InnerCommand: inner,
+				// -execdir runs in each match's directory.
+				DirDynamic: v == "-execdir",
 			}
 		}
 		if v == "-delete" {

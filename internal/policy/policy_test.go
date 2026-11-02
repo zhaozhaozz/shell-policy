@@ -144,6 +144,13 @@ func TestWritableDirAutoAllow(t *testing.T) {
 			effective: EffectAsk,
 		},
 		{
+			name:      "cd out of writable dir before delete asks",
+			command:   `cd /etc && rm -f passwd`,
+			writable:  []string{root},
+			decision:  "ask",
+			effective: EffectAsk,
+		},
+		{
 			name:      "second redirect outside writable dir asks",
 			command:   `echo hi > build/ok 2> /etc/cron.d/x`,
 			writable:  []string{filepath.Join(root, "build")},

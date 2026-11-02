@@ -34,28 +34,145 @@ func New(resolver *paths.Resolver) *Analyzer {
 
 // Analyze walks the command tree and enriches every simple command in
 // place. It is safe to call multiple times.
+//
+// The walk follows execution order and tracks the shell's working directory,
+// so in `cd /etc && rm passwd` the path resolves to /etc/passwd rather than
+// against the resolver's starting Cwd.
 func (a *Analyzer) Analyze(c *ir.Command) {
-	a.analyzeNode(c, c.Context)
+	start := a.Resolver.Cwd
+	defer func() { a.Resolver.Cwd = start }()
+	in := unknownCwd
+	if start != "" {
+		in = knownCwd(start)
+	}
+	a.analyzeNode(c, c.Context, in)
 }
 
-func (a *Analyzer) analyzeNode(c *ir.Command, ctx ir.Context) {
-	if c == nil {
-		return
+// setCwd points the resolver at the directory a command runs in.
+func (a *Analyzer) setCwd(s cwdState) {
+	if s.known {
+		a.Resolver.Cwd = s.dir
+	} else {
+		a.Resolver.Cwd = ""
 	}
+}
+
+// analyzeNode enriches c, which starts running in directory in, and returns
+// the directory the shell is in afterwards.
+func (a *Analyzer) analyzeNode(c *ir.Command, ctx ir.Context, in cwdState) cwdFlow {
+	if c == nil {
+		return unchanged(in)
+	}
+	// A statement ending in `&` runs in a background subshell: its cd never
+	// reaches the next statement.
+	background := c.Context.Background && !ctx.Background
 	// Inherit / merge context from parent.
 	c.Context = mergeContext(c.Context, ctx)
 
-	if c.Kind == ir.KindSimple && c.Simple != nil {
-		a.analyzeSimple(c)
+	var out cwdFlow
+	switch c.Kind {
+	case ir.KindSimple:
+		out = a.analyzeSimpleNode(c, in)
+	case ir.KindAnd:
+		left := a.analyzeNode(child(c, 0), c.Context, in)
+		right := a.analyzeNode(child(c, 1), c.Context, left.succ)
+		out = cwdFlow{succ: right.succ, fail: left.fail.merge(right.fail)}
+	case ir.KindOr:
+		// The right side only runs when the left side failed.
+		left := a.analyzeNode(child(c, 0), c.Context, in)
+		right := a.analyzeNode(child(c, 1), c.Context, left.fail)
+		out = cwdFlow{succ: left.succ.merge(right.succ), fail: right.fail}
+	case ir.KindSequence:
+		out = unchanged(in)
+		for _, ch := range c.Children {
+			out = a.analyzeNode(ch, c.Context, out.any())
+		}
+	case ir.KindPipeline:
+		// Every element runs in a subshell (bash). zsh runs the last one in
+		// the current shell, so a cd there leaves the directory unknown.
+		var last cwdFlow
+		for _, ch := range c.Children {
+			last = a.analyzeNode(ch, c.Context, in)
+		}
+		out = unchanged(in)
+		if len(c.Children) > 0 && last.any() != in {
+			out = cwdFlow{}
+		}
+	case ir.KindSubshell, ir.KindCommandSubstitution, ir.KindProcessSubstitution:
+		for _, ch := range c.Children {
+			a.analyzeNode(ch, c.Context, in)
+		}
+		out = unchanged(in)
+	case ir.KindFunction:
+		// The body runs whenever the function is called, from any directory,
+		// and the call may change the directory.
+		for _, ch := range c.Children {
+			a.analyzeNode(ch, c.Context, unknownCwd)
+		}
+		out = cwdFlow{}
+	default:
+		// Control flow: children are the nested statements in source order.
+		// A loop body may run again after its own cd, so any directory change
+		// inside makes the whole construct (and what follows) unknown.
+		state := in
+		if changesCwd(c) {
+			state = unknownCwd
+		}
+		for _, ch := range c.Children {
+			a.analyzeNode(ch, c.Context, state)
+		}
+		out = unchanged(state)
 	}
 
-	for _, child := range c.Children {
-		a.analyzeNode(child, c.Context)
-	}
-	if c.Simple != nil && c.Simple.Wrapper != nil && c.Simple.Wrapper.InnerCommand != nil {
-		a.analyzeNode(c.Simple.Wrapper.InnerCommand, c.Context)
-	}
+	// Redirects on a compound command are opened before it runs.
+	a.setCwd(in)
 	a.applyCompoundRedirectOps(c)
+	if background {
+		return unchanged(in)
+	}
+	return out
+}
+
+func child(c *ir.Command, i int) *ir.Command {
+	if i < len(c.Children) {
+		return c.Children[i]
+	}
+	return nil
+}
+
+// analyzeSimpleNode analyzes one simple command, its substitutions and its
+// wrapped inner command.
+func (a *Analyzer) analyzeSimpleNode(c *ir.Command, in cwdState) cwdFlow {
+	a.setCwd(in)
+	if c.Simple != nil {
+		a.analyzeSimple(c)
+	}
+	// Command and process substitutions run in subshells.
+	for _, ch := range c.Children {
+		a.analyzeNode(ch, c.Context, in)
+	}
+	w := c.Simple.Wrapper
+	if w == nil {
+		return a.cwdEffect(c, in)
+	}
+	if w.InnerCommand == nil {
+		return unchanged(in)
+	}
+	innerIn := in
+	switch {
+	case w.Dir != "":
+		innerIn = a.resolveDir(in, ir.ArgValue{Raw: w.Dir, Value: w.Dir, Confidence: ir.ConfStatic})
+	case w.DirDynamic, w.Host != "" || w.Container != "" || w.Image != "":
+		// Remote hosts and containers have their own filesystem.
+		innerIn = unknownCwd
+	}
+	inner := a.analyzeNode(w.InnerCommand, c.Context, innerIn)
+	if w.Type == "transparent" && inShellWrappers[w.Outer] || w.Type == "eval" {
+		return inner
+	}
+	// Separate processes (sudo, env, bash -c, find -exec, ...) cannot move
+	// this shell.
+	return unchanged(in)
 }
 
 // mergeContext keeps the more permissive (more specific) flags set.
