@@ -65,7 +65,7 @@ go build -o bin/shell-policy ./cmd/shell-policy
 
 ## 作为 Go 库使用
 
-其他 Go module（例如 ShellGate）通过公共包 `github.com/self/shell_permission/shellpolicy` 使用引擎：`Parse` / `Default` 加载并校验规则文件（未知字段、未知匹配字段 / 操作符、错误正则都会报错），`WithEffects` 按类别切换允许 / 询问 / 拒绝，`Evaluate` 按每次调用的 `Env`（当前目录、HOME、可写目录、追加敏感路径）判定并返回 explain trace。内置默认策略已嵌入二进制（`policies.DefaultYAML`），CLI 找不到 `policies/default.yaml` 时也会使用它。用法见 [docs/AUTHORING_RULES.md](docs/AUTHORING_RULES.md) 第 3 节。
+其他 Go module（例如 ShellGate）通过公共包 `github.com/self/shell_permission/shellpolicy` 使用引擎：`Parse` / `Default` 加载并校验规则文件（未知字段、未知匹配字段 / 操作符、错误正则都会报错），`WithEffects` 按类别切换允许 / 询问 / 拒绝，`Evaluate` 按每次调用的 `Env`（当前目录、HOME、可写目录、追加敏感路径）判定并返回 explain trace。内置默认策略已嵌入二进制（`policies.DefaultYAML`），CLI 找不到 `policies/default.yaml` 时也会使用它。规则编写指南同样嵌入（`docs.AuthoringRules`，经 `shellpolicy.AuthoringGuide()` 取得），方便界面在规则编辑器旁直接展示。用法见 [docs/AUTHORING_RULES.md](docs/AUTHORING_RULES.md) 第 3 节。
 
 ## 子命令
 

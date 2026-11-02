@@ -1,6 +1,7 @@
 package shellpolicy
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 )
@@ -189,5 +190,16 @@ func TestDefaultActions(t *testing.T) {
 func TestValidSensitivePattern(t *testing.T) {
 	if !ValidSensitivePattern("~/.aws/") || ValidSensitivePattern("[") || ValidSensitivePattern("") {
 		t.Fatal("ValidSensitivePattern mismatch")
+	}
+}
+
+func TestAuthoringGuide(t *testing.T) {
+	g := AuthoringGuide()
+	if !bytes.HasPrefix(g, []byte("# ")) || !bytes.Contains(g, []byte("rules:")) {
+		t.Fatalf("authoring guide not embedded: %.40q", g)
+	}
+	g[0] = 'x' // callers get a copy
+	if AuthoringGuide()[0] != '#' {
+		t.Fatal("AuthoringGuide must return a copy")
 	}
 }

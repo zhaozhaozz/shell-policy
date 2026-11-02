@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/self/shell_permission/docs"
 	"github.com/self/shell_permission/internal/analyze"
 	"github.com/self/shell_permission/internal/ir"
 	"github.com/self/shell_permission/internal/paths"
@@ -36,6 +37,10 @@ func (e Effect) Valid() bool { return e == Allow || e == Ask || e == Deny }
 
 // DefaultYAML returns a copy of the built-in default policy.
 func DefaultYAML() []byte { return append([]byte(nil), policies.DefaultYAML...) }
+
+// AuthoringGuide returns a copy of docs/AUTHORING_RULES.md, the guide to the
+// rule file syntax (Markdown, Chinese), for programs that show it to users.
+func AuthoringGuide() []byte { return append([]byte(nil), docs.AuthoringRules...) }
 
 // Default returns the parsed built-in default policy.
 func Default() *Policy {
