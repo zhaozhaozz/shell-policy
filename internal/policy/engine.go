@@ -133,6 +133,24 @@ func (e *Engine) Evaluate(root *ir.Command) (*Result, error) {
 	return res, nil
 }
 
+// relaxedFields collects the context fields of the categories that allow
+// (Action.Relaxes): allow rules read them as false.
+func (e *Engine) relaxedFields() map[string]bool {
+	var out map[string]bool
+	for _, a := range e.Policy.Actions {
+		if !a.permits() {
+			continue
+		}
+		for _, f := range a.Relaxes {
+			if out == nil {
+				out = map[string]bool{}
+			}
+			out[f] = true
+		}
+	}
+	return out
+}
+
 func (e *Engine) effective(name string) EffectiveAction {
 	if a, ok := e.Policy.Actions[name]; ok {
 		return a.EffectiveAction
@@ -156,8 +174,13 @@ func (e *Engine) severity(name string) int {
 func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 	le := &LeafEvaluation{Command: leaf}
 	units := leafUnits(le)
+	// cleared: an allow rule took the unit, later decide rules skip it.
+	// permitted: an allowing category matched it; other rules still see it.
 	cleared := make([]bool, len(units))
+	permitted := make([]bool, len(units))
+	var permit *CandidateAction
 	open := len(units)
+	relaxed := e.relaxedFields()
 	for _, r := range e.Policy.Rules {
 		if !r.IsEnabled() {
 			continue
@@ -171,7 +194,14 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 			}
 			act = a
 		}
-		hits, err := r.Match.matchUnits(le, units)
+		var view map[string]bool
+		if act != nil && act.EffectiveAction == EffectAllow {
+			if act.permits() && r.Match.references(act.Relaxes) {
+				continue // the context this category is about no longer matters
+			}
+			view = relaxed
+		}
+		hits, err := r.Match.matchUnits(le, units, view)
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: %w", r.ID, err)
 		}
@@ -214,7 +244,15 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 				SourceRuleID:    r.ID,
 				Reason:          r.Reason,
 			}
-			if act.EffectiveAction == EffectAllow {
+			if act.permits() {
+				for i, hit := range hits {
+					permitted[i] = permitted[i] || hit
+				}
+				if permit == nil {
+					permit = cand
+				}
+				mr.Terminal = false
+			} else if act.EffectiveAction == EffectAllow {
 				for i, hit := range hits {
 					if hit {
 						cleared[i] = true
@@ -239,6 +277,17 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 		}
 		if mr.Terminal {
 			break
+		}
+	}
+	// Every unit allowed by an allow rule or an allowing category, and no
+	// ask / deny: the category's allow decides.
+	if le.Decision == nil && permit != nil {
+		all := true
+		for i := range units {
+			all = all && (cleared[i] || permitted[i])
+		}
+		if all {
+			le.Decision = permit
 		}
 	}
 	// No rule decided the leaf (or an allow cleared only part of it): use the

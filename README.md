@@ -250,13 +250,13 @@ actions:
 
 ### 默认策略的类别
 
-`policies/default.yaml` 把危险操作分成以下类别，每个类别对应一个具名 action。调用方可以只改 action 的效果（允许 / 询问 / 拒绝）而不改规则，例如 ShellGate 的「简单设置」。
+`policies/default.yaml` 把危险操作分成以下类别，每个类别对应一个标了 `category: true` 的具名 action。调用方可以只改 action 的效果（允许 / 询问 / 拒绝）而不改规则，例如 ShellGate 的「简单设置」；在规则文件里直接写 `effectiveAction` 与经 `WithEffects` 设置含义相同。
 
 | 类别 | action | 默认 | 覆盖的命令 |
 | --- | --- | --- | --- |
 | 提权 | `ask_privilege` | ask | `sudo` / `su` / `doas` / `pkexec` 及其内层命令 |
 | 写、删、改权限：可写目录之外 | `ask_write_outside_writable` | ask | 可写目录外、目录未知、敏感文件或带动态参数的写 / 删 / 移动 / chmod / chown / git 写操作 |
-| 破坏性操作 | `deny_destructive` | deny | `rm -r` 系统路径、`rm -rf "$X"`、`chmod -R` 系统路径、`git push -f`、`git clean -fdx`、写块设备、`mkfs` / `fdisk` 等、风险分 ≥ 100 |
+| 破坏性操作 | `deny_destructive` | deny | `rm -r` 系统路径、`rm -rf "$X"`、`chmod -R` 系统路径、`git push -f`、`git clean -fdx`、写块设备、`mkfs` / `fdisk` 等 |
 | 读取敏感文件 | `ask_sensitive_read` | ask | `.env`、私钥、凭证等 |
 | 范围不确定的读取 | `ask_broad_read` | ask | 工作区内的 `grep -r` / `rg` 递归搜索，以及可能展开到敏感文件名的通配符读取（`cat *`、`head docs/*.md`）；`ls`、`stat` 只看文件名，不算 |
 | 敏感文件外传 | `deny_secret_exfiltration` | deny | 读敏感文件并发往网络 |
@@ -269,6 +269,10 @@ actions:
 另有几条固定规则（使用内置 `ask`，不属于任何类别）：改变后续命令行为的 shell 状态（`export PATH=...`、`alias`、`trap`、函数定义，即 `shell_config` 操作和函数体内的命令）以及 `exit` / `logout` 需要询问；`cd`、`pwd`、`echo`、`true`、普通变量的 `export` 等无副作用的内建命令直接放行。
 
 deny / ask 规则都是 `terminal: false`：同一条命令命中的所有类别都会记录，最终取最强的一条，所以把某个类别改成 ask 不会让另一个类别的 deny 失效。
+
+类别按操作各自生效。把一个类别设为「允许」，它的规则命中的操作就放行，但同一个操作仍要经过其他类别：只放行网络访问时，`curl -d hello https://…` 直接执行，`curl -o ~/.bashrc https://…` 仍按白名单外写入询问，`cat .env | curl -d @- …` 仍按外传拒绝；一条命令里每个操作都被放行、且没有任何类别询问或拒绝时整条命令才放行，没被任何规则覆盖的部分仍走默认规则。提权和远程 / 容器内执行这两类说的是「在什么环境里执行」（action 上的 `relaxes` 列出对应的 context 字段）：设为允许后，`sudo`、`ssh host`、`docker exec` 本身放行，内层命令按没有这层包装时的规则判定，所以 `sudo ls` 放行、`sudo make` 走默认规则、`sudo rm /etc/x` 仍按白名单外写入询问。
+
+风险分（`riskScore`）只用于展示和排序，默认策略不再按风险分拒绝：多个询问类别叠加仍是询问，不会变成「破坏性操作」拒绝。
 
 ### 规则的三种 mode
 

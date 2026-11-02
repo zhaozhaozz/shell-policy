@@ -128,7 +128,7 @@ func decide(ruleFile []byte, command, cwd, home string) (*shellpolicy.Result, er
 要点：
 - `Result` 的关键字段：`Effect`（`allow` / `ask` / `deny`）、`Action`（决定结果的具名 action，没有规则决定时是默认 action）、`RuleID`、`Reason`、`Steps`（explain trace：每条命中规则、所在的子命令、是否 partial）、`Operations`（识别出的操作和路径分类）。
 - 命令无法解析时 `Evaluate` 返回 error，调用方应至少按 ask 处理，不要放行。
-- `WithEffects` 的语义：设为 ask / deny 时，使用该 action 的规则都询问 / 拒绝；把 deny / ask 类 action 设为 allow 时，这些规则被停用，该类别不再询问或拒绝，由其余规则继续判定（不会把这些规则匹配到的命令一律放行）；默认 action 按字面生效。
+- `WithEffects` 的语义：设为 ask / deny 时，使用该 action 的规则都询问 / 拒绝；把类别（`category: true`）设为 allow 时，它的规则命中的操作放行，同一操作上其他类别的询问 / 拒绝仍然生效，带 `relaxes` 的类别（提权、远程 / 容器）改为不再因为那层环境询问、内层命令按自身判定（见第 4 节 Action）；默认 action 按字面生效。与在规则文件里写 `effectiveAction` 含义相同。
 - `Env.WorkspaceRoots` 为空时使用 `WritableDirs`；策略文件里的 `writableDirs`、`sensitivePaths` 会叠加到 `Env` 上。
 - `shellpolicy.DefaultYAML()` 返回内置默认策略原文，可作为「恢复默认」的内容。
 - 同一模块内部也可以直接使用 `internal/analyze`、`internal/policy` 等包（CLI 就是这样做的）。
@@ -164,9 +164,13 @@ rules:
 ```
 
 ### Action（动作）
-每个动作定义两件事：
+每个动作定义：
 - `effectiveAction`：最终归类，只能是 `allow` / `ask` / `deny`。
 - `severity`：同一 `effectiveAction` 内部排序用，越大越优先。
+- `category`（可选）：可整体切换的类别（如 `ask_network`）。普通的 allow 动作会「清掉」它命中的操作，后面的规则不再看这些操作，所以兜底的询问规则要放在 allow 规则之后；类别动作设为 allow 时则只「放行」命中的操作，后面的 deny / ask 规则照样会看这些操作，其他类别的询问和拒绝仍然生效，默认规则不再兜底。
+- `relaxes`（可选，需 `category: true`）：这个类别说的 context 字段，例如 `context.privilegeEscalated`。类别设为 allow 时，它的规则里检查这些字段的会被跳过，所有 allow 规则把这些字段当作 false 读取，即「在 sudo 下」不再是询问的理由，内层命令按自身判定。
+
+在规则文件里把类别写成 `effectiveAction: allow`，与经 `shellpolicy.WithEffects` 设置 allow 含义相同。
 
 聚合规则：跨所有 leaf，先按 `deny > ask > allow`，同级再按 `severity` 取高者。同一 leaf 上命中多条非 terminal 的 deny / ask 规则时也按这个顺序取最强者，之后命中的 allow 不会覆盖它。规则链跑完仍无决策的 leaf 使用 `defaultAction`。
 
@@ -197,8 +201,7 @@ rules:
 `recursive_force_delete`、`privilege_escalated`），随后的 `decide` 规则根据这些
 标签、operation、path scope 给出决策。
 
-`enrich` 累加的 `riskScore` 可被后续规则使用，例如默认策略的
-`deny-high-risk`（`riskScore >= 100 → deny_destructive`）。
+`enrich` 累加的 `riskScore` 也能被后续规则匹配，但默认策略只把它用于展示和排序：按分数拒绝会让几个询问类别叠加成拒绝，用户无法从类别设置推断结果。
 
 默认策略的 deny / ask 规则都写成 `terminal: false`：同一 leaf 命中的所有 deny / ask
 都会记录并取最强者，allow 规则放在不可绕过的 deny / ask 之后。新增 deny / ask 规则时

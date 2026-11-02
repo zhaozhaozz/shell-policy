@@ -19,8 +19,14 @@ policy:
   sensitivePaths: []
 
 # Actions are grouped into categories. Each category below has exactly one
-# named action, so a caller can switch a whole category between allow / ask /
-# deny (for example ShellGate's simple settings) without editing rules:
+# named action marked `category: true`, so a caller can switch a whole
+# category between allow / ask / deny (for example ShellGate's simple
+# settings) without editing rules. A category acts per operation: set to
+# allow, it allows what its rules match while every other category still
+# applies (ask_network: allow lets curl run, yet `curl -o ~/.bashrc` still
+# asks as a write outside writableDirs). ask_privilege and ask_remote are
+# about a context (sudo, ssh, docker exec); set to allow, that context is no
+# longer a reason to ask and the inner command is judged on its own.
 #
 #   ask_privilege                sudo / su / doas / pkexec
 #   ask_write_outside_writable   write, delete, chmod outside writableDirs
@@ -53,33 +59,45 @@ actions:
   ask_privilege:
     effectiveAction: "ask"
     severity: 65
+    category: true
+    relaxes: ["context.privilegeEscalated"]
   ask_write_outside_writable:
     effectiveAction: "ask"
     severity: 55
+    category: true
   ask_sensitive_read:
     effectiveAction: "ask"
     severity: 70
+    category: true
   ask_broad_read:
     effectiveAction: "ask"
     severity: 55
+    category: true
   ask_network:
     effectiveAction: "ask"
     severity: 60
+    category: true
   ask_remote:
     effectiveAction: "ask"
     severity: 65
+    category: true
+    relaxes: ["context.inRemoteCommand", "context.inContainerCommand"]
   ask_package_manager:
     effectiveAction: "ask"
     severity: 60
+    category: true
   deny_destructive:
     effectiveAction: "deny"
     severity: 100
+    category: true
   deny_secret_exfiltration:
     effectiveAction: "deny"
     severity: 100
+    category: true
   deny_inline_eval:
     effectiveAction: "deny"
     severity: 95
+    category: true
 
 # Deny and ask rules are non-terminal: every one that matches is recorded and
 # the strongest wins, so switching one category to "ask" never hides another
@@ -317,28 +335,29 @@ rules:
     reason: "Inline language evaluation (python/node/perl/ruby -e/-c) is denied by default"
     terminal: false
 
-  - id: "deny-high-risk"
-    mode: "decide"
-    order: 1090
-    match:
-      riskScore:
-        greaterThanOrEqual: 100
-    action: "deny_destructive"
-    reason: "Aggregated risk score is too high"
-    terminal: false
-
   # ------------------------------------------------------------------
   # Phase 3 — Asks that no allow rule may override.
   # ------------------------------------------------------------------
+  # Privilege, remote and container rules come in pairs: the wrapper itself
+  # (sudo, ssh, docker exec ...), which the category allows when set to
+  # allow, and the inner command's context, which it then stops asking about
+  # (see `relaxes` on the action) so that the inner command is judged alone.
   - id: "ask-privilege"
     mode: "decide"
     order: 1100
     match:
-      any:
-        - context.privilegeEscalated:
-            equals: true
-        - command.program:
-            in: ["sudo", "su", "doas", "pkexec"]
+      command.program:
+        in: ["sudo", "su", "doas", "pkexec"]
+    action: "ask_privilege"
+    reason: "Running with elevated privileges requires approval"
+    terminal: false
+
+  - id: "ask-privilege-context"
+    mode: "decide"
+    order: 1101
+    match:
+      context.privilegeEscalated:
+        equals: true
     action: "ask_privilege"
     reason: "Running with elevated privileges requires approval"
     terminal: false
@@ -347,11 +366,18 @@ rules:
     mode: "decide"
     order: 1110
     match:
-      any:
-        - context.inRemoteCommand:
-            equals: true
-        - operation.type:
-            equals: "remote_exec"
+      operation.type:
+        equals: "remote_exec"
+    action: "ask_remote"
+    reason: "Remote command requires approval"
+    terminal: false
+
+  - id: "ask-remote-context"
+    mode: "decide"
+    order: 1111
+    match:
+      context.inRemoteCommand:
+        equals: true
     action: "ask_remote"
     reason: "Remote command requires approval"
     terminal: false
@@ -360,11 +386,18 @@ rules:
     mode: "decide"
     order: 1120
     match:
-      any:
-        - context.inContainerCommand:
-            equals: true
-        - command.wrapperType:
-            in: ["docker_exec", "docker_run", "kubectl_exec"]
+      command.wrapperType:
+        in: ["docker_exec", "docker_run", "kubectl_exec"]
+    action: "ask_remote"
+    reason: "Running a command in a container requires approval"
+    terminal: false
+
+  - id: "ask-container-context"
+    mode: "decide"
+    order: 1121
+    match:
+      context.inContainerCommand:
+        equals: true
     action: "ask_remote"
     reason: "Running a command in a container requires approval"
     terminal: false

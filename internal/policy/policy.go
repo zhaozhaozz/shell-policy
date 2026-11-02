@@ -15,6 +15,7 @@ package policy
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/self/shell_permission/internal/ir"
 	"github.com/self/shell_permission/internal/paths"
@@ -45,7 +46,22 @@ type Action struct {
 	Severity        int             `json:"severity" yaml:"severity"`
 	UserVisible     string          `json:"userVisible,omitempty" yaml:"userVisible,omitempty"`
 	Tags            []string        `json:"tags,omitempty" yaml:"tags,omitempty"`
+	// Category marks a switchable category (ask_network, ...). Its effect
+	// applies per operation: when it allows, its rules allow the operations
+	// they match without hiding them from other rules, so another category's
+	// ask or deny on the same operation still applies and the default action
+	// does not. A plain allow action instead clears the operations it
+	// matches, so that later fallback rules skip them.
+	Category bool `json:"category,omitempty" yaml:"category,omitempty"`
+	// Relaxes lists boolean context fields this category is about, e.g.
+	// context.privilegeEscalated. When the category allows, its rules that
+	// test them are skipped and allow rules read them as false: being under
+	// sudo is no longer a reason to ask, and the command is judged on its own.
+	Relaxes []string `json:"relaxes,omitempty" yaml:"relaxes,omitempty"`
 }
+
+// permits reports whether the action is a category that currently allows.
+func (a *Action) permits() bool { return a.Category && a.EffectiveAction == EffectAllow }
 
 // Effects describes the side-effects of a matching rule.
 type Effects struct {
@@ -133,6 +149,14 @@ func (p *Policy) Validate() []error {
 	for _, a := range p.Actions {
 		if a.EffectiveAction != EffectAllow && a.EffectiveAction != EffectAsk && a.EffectiveAction != EffectDeny {
 			errs = append(errs, fmt.Errorf("action %q has invalid effectiveAction %q", a.Name, a.EffectiveAction))
+		}
+		for _, f := range a.Relaxes {
+			if !knownFields[f] || !strings.HasPrefix(f, "context.") {
+				errs = append(errs, fmt.Errorf("action %q: relaxes %q is not a context field", a.Name, f))
+			}
+		}
+		if len(a.Relaxes) > 0 && !a.Category {
+			errs = append(errs, fmt.Errorf("action %q: relaxes needs category: true", a.Name))
 		}
 	}
 	for _, r := range p.Rules {

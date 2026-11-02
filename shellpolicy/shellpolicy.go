@@ -114,16 +114,17 @@ func (p *Policy) SensitivePaths() []string { return append([]string(nil), p.p.Se
 
 // WithEffects returns a copy of the policy in which the named actions take
 // new effects. This is how a whole category is switched without editing
-// rules:
+// rules; it means the same as writing the effect in the rule file:
 //
-//   - ask / deny sets the action's effect, so every rule using it asks or
-//     denies;
-//   - allow on a deny/ask action disables the rules that use it: that
-//     category stops asking or denying and the remaining rules decide. It
-//     does not auto-allow everything those rules matched (allowing sudo
-//     must not allow `sudo rm -rf ~` outside the writable directories);
-//   - the default action (and any action already allowing) takes the effect
-//     literally.
+//   - ask / deny: every rule using the action asks or denies;
+//   - allow on a category action (category: true): its rules allow the
+//     operations they match, and every other category still applies to the
+//     same operations (allowing the network lets `curl` run, yet
+//     `curl -o ~/.bashrc` still asks as a write outside the writable
+//     directories). A category about a context (relaxes, e.g. sudo) stops
+//     asking about that context and the inner command is judged on its own,
+//     so allowing sudo allows `sudo ls` but not `sudo rm -rf ~`;
+//   - the default action and other actions take the effect literally.
 //
 // Unknown action names and invalid effects are errors.
 func (p *Policy) WithEffects(effects map[string]Effect) (*Policy, error) {
@@ -133,11 +134,6 @@ func (p *Policy) WithEffects(effects map[string]Effect) (*Policy, error) {
 		ac := *a
 		cp.Actions[name] = &ac
 	}
-	cp.Rules = make([]*policy.Rule, len(p.p.Rules))
-	for i, r := range p.p.Rules {
-		rc := *r
-		cp.Rules[i] = &rc
-	}
 	for name, eff := range effects {
 		a, ok := cp.Actions[name]
 		if !ok {
@@ -145,14 +141,6 @@ func (p *Policy) WithEffects(effects map[string]Effect) (*Policy, error) {
 		}
 		if !eff.Valid() {
 			return nil, fmt.Errorf("action %q: invalid effect %q", name, eff)
-		}
-		if eff == Allow && a.EffectiveAction != policy.EffectAllow && name != cp.DefaultAction {
-			disabled := false
-			for _, r := range cp.Rules {
-				if r.Mode == policy.ModeDecide && r.Action == name {
-					r.Enabled = &disabled
-				}
-			}
 		}
 		a.EffectiveAction = policy.EffectiveAction(eff)
 	}

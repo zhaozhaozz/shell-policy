@@ -25,6 +25,9 @@ type matchCtx struct {
 	cmd   *ir.Command
 	tags  map[string]bool
 	flags map[string]any
+	// relaxed fields read as false (see Action.Relaxes); only allow rules
+	// get a non-nil set.
+	relaxed map[string]bool
 }
 
 // matchUnit is one (operation, path) pair of a leaf. Rules are matched per
@@ -57,7 +60,7 @@ func leafUnits(leaf *LeafEvaluation) []matchUnit {
 
 // Eval returns true if the matcher matches at least one unit of the leaf.
 func (m Matcher) Eval(leaf *LeafEvaluation) (bool, error) {
-	hits, err := m.matchUnits(leaf, leafUnits(leaf))
+	hits, err := m.matchUnits(leaf, leafUnits(leaf), nil)
 	if err != nil {
 		return false, err
 	}
@@ -70,7 +73,7 @@ func (m Matcher) Eval(leaf *LeafEvaluation) (bool, error) {
 }
 
 // matchUnits reports, for each unit, whether the matcher matches it.
-func (m Matcher) matchUnits(leaf *LeafEvaluation, units []matchUnit) ([]bool, error) {
+func (m Matcher) matchUnits(leaf *LeafEvaluation, units []matchUnit, relaxed map[string]bool) ([]bool, error) {
 	tags := map[string]bool{}
 	for _, t := range leaf.Tags {
 		tags[t] = true
@@ -81,7 +84,7 @@ func (m Matcher) matchUnits(leaf *LeafEvaluation, units []matchUnit) ([]bool, er
 	}
 	hits := make([]bool, len(units))
 	for i, u := range units {
-		ctx := &matchCtx{leaf: leaf, op: u.op, path: u.path, cmd: leaf.Command, tags: tags, flags: flags}
+		ctx := &matchCtx{leaf: leaf, op: u.op, path: u.path, cmd: leaf.Command, tags: tags, flags: flags, relaxed: relaxed}
 		ok, err := evalNode(m, ctx)
 		if err != nil {
 			return nil, err
@@ -189,6 +192,9 @@ func evalField(field string, cond map[string]any, ctx *matchCtx) (bool, error) {
 // lookupField is the (small) field language. It returns the value (or
 // nil) and a bool reporting whether the field was present.
 func lookupField(field string, ctx *matchCtx) (any, bool) {
+	if ctx.relaxed[field] {
+		return false, true
+	}
 	switch {
 	case field == "tags":
 		return ctx.leaf.Tags, true
@@ -662,6 +668,35 @@ func validateNode(m map[string]any) error {
 		}
 	}
 	return nil
+}
+
+// references reports whether the matcher tests any of the fields.
+func (m Matcher) references(fields []string) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	for k, v := range m {
+		switch k {
+		case "all", "any":
+			list, _ := v.([]any)
+			for _, x := range list {
+				if sub, ok := asMap(x); ok && Matcher(sub).references(fields) {
+					return true
+				}
+			}
+		case "not":
+			if sub, ok := asMap(v); ok && Matcher(sub).references(fields) {
+				return true
+			}
+		default:
+			for _, f := range fields {
+				if k == f {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func asMap(v any) (map[string]any, bool) {
