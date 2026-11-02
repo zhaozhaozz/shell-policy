@@ -2,6 +2,7 @@ package analyze
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/self/shell_permission/internal/ir"
@@ -110,6 +111,22 @@ func TestAnalyzeShellCUsesRecursiveBashParsing(t *testing.T) {
 	if got := rawPaths(write.Paths); !reflect.DeepEqual(got, []string{"inner.txt"}) {
 		t.Fatalf("inner redirect path mismatch: got %#v", got)
 	}
+}
+
+func TestAnalyzeStreamDeviceRedirectsAreNotFileOps(t *testing.T) {
+	root := analyzeForTest(t, `ls missing 2>/dev/null < /dev/stdin >> /dev/stderr`)
+	ls := requireProgram(t, root, "ls")
+	for _, op := range ls.Simple.Operations {
+		for _, p := range op.Paths {
+			if strings.HasPrefix(p.Raw, "/dev/") {
+				t.Fatalf("stream device redirect recorded as %s: %#v", op.Type, op)
+			}
+		}
+	}
+
+	root = analyzeForTest(t, `echo hi > /dev/sda`)
+	echo := requireProgram(t, root, "echo")
+	requireOp(t, echo, ir.OpFileWrite)
 }
 
 func TestAnalyzeNestedWrappersPropagatePrivilegeAndDynamicArgs(t *testing.T) {

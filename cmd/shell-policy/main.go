@@ -546,6 +546,9 @@ func emitDecision(res *policy.Result, jsonOut, explain bool, pr *parser.ParseRes
 			if mr.Reason != "" {
 				fmt.Printf("  (%s)", mr.Reason)
 			}
+			if mr.Partial {
+				fmt.Print("  [partial: other operations still undecided]")
+			}
 			fmt.Println()
 		}
 	}

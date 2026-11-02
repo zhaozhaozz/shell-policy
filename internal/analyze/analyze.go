@@ -218,6 +218,9 @@ func firstSimpleLeaf(c *ir.Command) *ir.Command {
 
 func (a *Analyzer) appendRedirectOps(sc *ir.SimpleCommand, redirects []ir.Redirect, ctx ir.Context) {
 	for _, r := range redirects {
+		if isStreamDevice(r.Target) {
+			continue
+		}
 		switch r.Op {
 		case ir.RedirIn, ir.RedirHeredoc:
 			sc.Operations = append(sc.Operations, ir.ResourceOp{
@@ -245,6 +248,21 @@ func (a *Analyzer) appendRedirectOps(sc *ir.SimpleCommand, redirects []ir.Redire
 			})
 		}
 	}
+}
+
+// isStreamDevice reports a redirect target that never touches the
+// filesystem. Allow rules must cover every operation of a command, so
+// recording `2>/dev/null` as a system-path write would turn every quiet
+// readonly command into an approval.
+func isStreamDevice(v ir.ArgValue) bool {
+	if v.Confidence != ir.ConfStatic {
+		return false
+	}
+	switch v.Value {
+	case "/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr":
+		return true
+	}
+	return false
 }
 
 // AnalyzeText is a convenience helper: parse + analyze.

@@ -278,6 +278,13 @@ rules:
 规则按 `order` 升序执行；命中一条 terminal 规则即停止。每条 leaf 命令独立评估，
 整条命令的最终决策用 `deny > ask > allow` 聚合。
 
+leaf 内按「(操作, 路径) 单元」匹配：`enrich` / `audit` 规则和 deny / ask 决策
+只要任一单元命中就生效；allow 规则只放行它命中的单元，其余单元继续往下匹配，
+所有单元都被放行后 leaf 才是 allow。因此 `cat README.md > ~/.bashrc` 里对
+README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd` 的第二个
+路径也会单独判定。重定向到 `/dev/null`、`/dev/stdin`、`/dev/stdout`、
+`/dev/stderr` 不记为文件操作。
+
 ### 匹配字段
 
 `match` 是一棵条件树，支持 `all` / `any` / `not` 组合器，叶子条件支持

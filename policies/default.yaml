@@ -298,8 +298,38 @@ rules:
             equals: false
         - context.privilegeEscalated:
             equals: false
+    effects:
+      addTags: ["writable_mutation"]
     action: "allow"
     reason: "Ordinary modification inside a configured writable directory"
+    terminal: true
+
+  # Allow rules only clear the operations they match, so the read side of
+  # `cp src/a build/` or `sed -i ... build/x` needs its own rule: workspace
+  # reads that feed a modification inside a writable directory.
+  - id: "allow-writable-dir-mutation-source"
+    mode: "decide"
+    order: 4910
+    match:
+      all:
+        - tags:
+            contains: "writable_mutation"
+        - operation.type:
+            in: ["file_read", "file_list", "file_read_metadata"]
+        - path.scope:
+            in: ["inside_workspace", "tmp"]
+        - path.secretCandidate:
+            equals: false
+        - command.hasDynamicArgs:
+            equals: false
+        - context.inRemoteCommand:
+            equals: false
+        - context.inContainerCommand:
+            equals: false
+        - context.privilegeEscalated:
+            equals: false
+    action: "allow"
+    reason: "Workspace source of a modification inside a configured writable directory"
     terminal: true
 
   - id: "allow-bash-readonly"

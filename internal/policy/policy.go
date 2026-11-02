@@ -179,6 +179,9 @@ type MatchedRule struct {
 	Action   string   `json:"action,omitempty"`
 	Reason   string   `json:"reason,omitempty"`
 	Terminal bool     `json:"terminal,omitempty"`
+	// Partial marks an allow rule that cleared only some of the leaf's
+	// (operation, path) units; matching continued for the rest.
+	Partial bool `json:"partial,omitempty"`
 }
 
 // CandidateAction is a possibly-final action produced by a decide rule.

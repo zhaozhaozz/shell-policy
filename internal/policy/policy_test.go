@@ -122,6 +122,34 @@ func TestWritableDirAutoAllow(t *testing.T) {
 			decision:  "ask_workspace_write",
 			effective: EffectAsk,
 		},
+		{
+			name:      "copy workspace file into writable dir allowed",
+			command:   `cp README.md build/`,
+			writable:  []string{filepath.Join(root, "build")},
+			decision:  "allow",
+			effective: EffectAllow,
+		},
+		{
+			name:      "in-place edit inside writable dir allowed",
+			command:   `sed -i s/a/b/ build/x`,
+			writable:  []string{filepath.Join(root, "build")},
+			decision:  "allow",
+			effective: EffectAllow,
+		},
+		{
+			name:      "copy secret into writable dir asks",
+			command:   `cp .env build/`,
+			writable:  []string{filepath.Join(root, "build")},
+			decision:  "ask_sensitive_read",
+			effective: EffectAsk,
+		},
+		{
+			name:      "second redirect outside writable dir asks",
+			command:   `echo hi > build/ok 2> /etc/cron.d/x`,
+			writable:  []string{filepath.Join(root, "build")},
+			decision:  "ask",
+			effective: EffectAsk,
+		},
 	}
 
 	for _, tc := range cases {
@@ -187,6 +215,46 @@ func TestComplexCommandDecisions(t *testing.T) {
 					result.Decision, result.EffectiveDecision, tc.decision, tc.effective, result)
 			}
 		})
+	}
+}
+
+// TestAllowMustCoverEveryOperation guards against one harmless operation
+// vouching for the whole command: an allow rule clears only the
+// (operation, path) units it matches, and path.scope is checked per path.
+func TestAllowMustCoverEveryOperation(t *testing.T) {
+	cases := []struct {
+		name      string
+		command   string
+		decision  string
+		effective EffectiveAction
+	}{
+		{"readonly command redirected into home", `cat README.md > ~/.bashrc`, "ask", EffectAsk},
+		{"readonly command redirected into system path", `cat README.md > /etc/hosts`, "ask", EffectAsk},
+		{"subshell redirected into system path", `(cat README.md) > /etc/hosts`, "ask", EffectAsk},
+		{"brace group redirected into secret", `{ cat README.md; } > .env`, "ask", EffectAsk},
+		{"second path outside workspace", `cat README.md /etc/passwd`, "ask", EffectAsk},
+		{"system path after a workspace path", `rm -rf build /etc`, "deny_destructive", EffectDeny},
+		{"stream device redirect stays readonly", `ls missing 2>/dev/null`, "allow_readonly", EffectAllow},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := evalDefaultPolicy(t, tc.command)
+			if result.Decision != tc.decision || result.EffectiveDecision != tc.effective {
+				t.Fatalf("decision = %s/%s, want %s/%s; matched=%#v",
+					result.Decision, result.EffectiveDecision, tc.decision, tc.effective, result.MatchedRules)
+			}
+		})
+	}
+
+	result := evalDefaultPolicy(t, `cat README.md > /etc/hosts`)
+	for _, mr := range result.MatchedRules {
+		if mr.RuleID == "allow-bash-readonly" && (!mr.Partial || mr.Terminal) {
+			t.Fatalf("allow-bash-readonly should be a non-terminal partial match, got %#v", mr)
+		}
+	}
+	if !hasMatchedRule(result, "allow-bash-readonly") {
+		t.Fatalf("allow-bash-readonly should clear the read, matched=%#v", result.MatchedRules)
 	}
 }
 

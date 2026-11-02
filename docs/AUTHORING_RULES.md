@@ -246,7 +246,7 @@ not: { ... }   # 取反
 | `operation.type`              | string   | 操作类型，见第 7 节                             |
 | `operation.target`            | string   | 操作目标原始 token                              |
 | `operation.dynamic`           | bool     | 该操作目标是否动态                              |
-| `path.scope`                  | string   | 路径范围，见第 7 节                             |
+| `path.scope`                  | string   | 当前匹配单元的路径范围，见第 7 节               |
 | `path.secretCandidate`        | bool     | 是否疑似敏感文件（.env / id_rsa / 凭证等）      |
 | `path.writable`               | bool     | 操作的**所有**路径是否都在可写白名单内          |
 | `context.inPipeline`          | bool     | 是否在管道中                                    |
@@ -347,6 +347,11 @@ not: { ... }   # 取反
   `privilegeEscalated`）会从外层传递到内层 leaf。
 - **多 leaf 命令**：`a && b`、`a | b`、`a; b` 会产生多个 leaf。决策按
   `deny > ask > allow` 聚合；只要任一分支危险，整体就不会 allow。
+- **单个 leaf 有多个操作或路径**：规则按「(操作, 路径) 单元」匹配。deny / ask
+  只要任一单元命中就生效；allow 只放行它命中的单元，剩下的单元继续匹配后续规则，
+  全部放行后 leaf 才是 allow。写 allow 规则时不要指望「顺带」放行同一命令的其他
+  操作：例如 `cp src/a build/` 的读源文件需要 `allow-writable-dir-mutation-source`
+  这样的规则单独覆盖。`explain` 里标 `[partial]` 的就是只放行了部分单元的 allow。
 - **regex 字段**：`path.normalizedRegex` / `path.rawRegex` 是规则内对路径做正则
   匹配的专用入口，普通字段用 `regex` 操作符即可。
 

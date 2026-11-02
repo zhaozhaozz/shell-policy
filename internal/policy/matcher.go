@@ -20,16 +20,57 @@ type Matcher map[string]any
 // matchCtx is the data the matcher sees.
 type matchCtx struct {
 	leaf  *LeafEvaluation
-	op    *ir.ResourceOp // current op being matched against
+	op    *ir.ResourceOp     // current op being matched against
+	path  *ir.NormalizedPath // current path of op; nil when op has none
 	cmd   *ir.Command
 	tags  map[string]bool
 	flags map[string]any
 }
 
-// Eval returns true if the matcher matches at least one operation of
-// the leaf. A leaf with no operations is matched against an empty
-// pseudo-operation so context-only rules still fire.
+// matchUnit is one (operation, path) pair of a leaf. Rules are matched per
+// unit so that path.scope is checked against every path of an operation
+// (`cat README.md /etc/passwd`), not only the first one.
+type matchUnit struct {
+	op   *ir.ResourceOp
+	path *ir.NormalizedPath
+}
+
+// leafUnits expands a leaf into its match units. A leaf with no operations
+// yields one empty pseudo-unit so context-only rules still fire.
+func leafUnits(leaf *LeafEvaluation) []matchUnit {
+	if leaf.Command == nil || leaf.Command.Simple == nil || len(leaf.Command.Simple.Operations) == 0 {
+		return []matchUnit{{}}
+	}
+	var units []matchUnit
+	for i := range leaf.Command.Simple.Operations {
+		op := &leaf.Command.Simple.Operations[i]
+		if len(op.Paths) == 0 {
+			units = append(units, matchUnit{op: op})
+			continue
+		}
+		for j := range op.Paths {
+			units = append(units, matchUnit{op: op, path: &op.Paths[j]})
+		}
+	}
+	return units
+}
+
+// Eval returns true if the matcher matches at least one unit of the leaf.
 func (m Matcher) Eval(leaf *LeafEvaluation) (bool, error) {
+	hits, err := m.matchUnits(leaf, leafUnits(leaf))
+	if err != nil {
+		return false, err
+	}
+	for _, hit := range hits {
+		if hit {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// matchUnits reports, for each unit, whether the matcher matches it.
+func (m Matcher) matchUnits(leaf *LeafEvaluation, units []matchUnit) ([]bool, error) {
 	tags := map[string]bool{}
 	for _, t := range leaf.Tags {
 		tags[t] = true
@@ -38,24 +79,16 @@ func (m Matcher) Eval(leaf *LeafEvaluation) (bool, error) {
 	if leaf.Command != nil && leaf.Command.Simple != nil && leaf.Command.Simple.Flags != nil {
 		flags = leaf.Command.Simple.Flags
 	}
-	ops := []*ir.ResourceOp{nil}
-	if leaf.Command != nil && leaf.Command.Simple != nil && len(leaf.Command.Simple.Operations) > 0 {
-		ops = ops[:0]
-		for i := range leaf.Command.Simple.Operations {
-			ops = append(ops, &leaf.Command.Simple.Operations[i])
-		}
-	}
-	for _, op := range ops {
-		ctx := &matchCtx{leaf: leaf, op: op, cmd: leaf.Command, tags: tags, flags: flags}
+	hits := make([]bool, len(units))
+	for i, u := range units {
+		ctx := &matchCtx{leaf: leaf, op: u.op, path: u.path, cmd: leaf.Command, tags: tags, flags: flags}
 		ok, err := evalNode(m, ctx)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		if ok {
-			return true, nil
-		}
+		hits[i] = ok
 	}
-	return false, nil
+	return hits, nil
 }
 
 func evalNode(m Matcher, ctx *matchCtx) (bool, error) {
@@ -222,8 +255,8 @@ func lookupField(field string, ctx *matchCtx) (any, bool) {
 			return ctx.op.Dynamic, true
 		}
 	case field == "path.scope":
-		if ctx.op != nil && len(ctx.op.Paths) > 0 {
-			return string(ctx.op.Paths[0].Scope), true
+		if ctx.path != nil {
+			return string(ctx.path.Scope), true
 		}
 	case field == "path.secretCandidate":
 		if ctx.op != nil {

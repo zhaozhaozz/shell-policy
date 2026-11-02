@@ -137,15 +137,40 @@ func (e *Engine) effective(name string) EffectiveAction {
 	return EffectAsk
 }
 
+// evaluateLeaf runs the rule chain over one leaf, matching rules per
+// (operation, path) unit. Enrich/audit rules and deny/ask decisions fire when
+// any unit matches. An allow rule only clears the units it matches, and the
+// leaf is allowed once every unit is cleared: a harmless read
+// (`cat README.md`) cannot vouch for a write on the same command
+// (`> ~/.bashrc`). Later decide rules only see units that are not cleared.
 func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 	le := &LeafEvaluation{Command: leaf}
+	units := leafUnits(le)
+	cleared := make([]bool, len(units))
+	open := len(units)
 	for _, r := range e.Policy.Rules {
 		if !r.IsEnabled() {
 			continue
 		}
-		matched, err := r.Match.Eval(le)
+		var act *Action
+		decide := r.Mode == ModeDecide && r.Action != ""
+		if decide {
+			a, ok := e.Policy.Actions[r.Action]
+			if !ok {
+				return nil, fmt.Errorf("rule %q references unknown action %q", r.ID, r.Action)
+			}
+			act = a
+		}
+		hits, err := r.Match.matchUnits(le, units)
 		if err != nil {
 			return nil, fmt.Errorf("rule %q: %w", r.ID, err)
+		}
+		matched := false
+		for i := range hits {
+			if decide && cleared[i] {
+				hits[i] = false
+			}
+			matched = matched || hits[i]
 		}
 		if !matched {
 			continue
@@ -167,28 +192,51 @@ func (e *Engine) evaluateLeaf(leaf *ir.Command) (*LeafEvaluation, error) {
 				le.AuditNotes = append(le.AuditNotes, r.Effects.AddAuditNote)
 			}
 		}
-		// Decide rules set the candidate decision.
-		if r.Mode == ModeDecide && r.Action != "" {
-			act, ok := e.Policy.Actions[r.Action]
-			if !ok {
-				return nil, fmt.Errorf("rule %q references unknown action %q", r.ID, r.Action)
-			}
-			le.Decision = &CandidateAction{
+		// Decide rules set the candidate decision; an allow decides the leaf
+		// only once it has no uncleared units left.
+		if decide {
+			cand := &CandidateAction{
 				ActionName:      act.Name,
 				EffectiveAction: act.EffectiveAction,
 				Severity:        act.Severity,
 				SourceRuleID:    r.ID,
 				Reason:          r.Reason,
 			}
+			if act.EffectiveAction == EffectAllow {
+				for i, hit := range hits {
+					if hit {
+						cleared[i] = true
+						open--
+					}
+				}
+				if open > 0 {
+					mr.Partial = true
+					mr.Terminal = false
+				} else {
+					le.Decision = cand
+				}
+			} else {
+				le.Decision = cand
+			}
 		}
 		le.MatchedRules = append(le.MatchedRules, mr)
 		if e.Logger != nil {
 			e.Logger.Debug("rule matched",
 				"rule", r.ID, "mode", string(r.Mode), "action", r.Action,
-				"terminal", r.IsTerminal(), "risk", le.RiskScore)
+				"terminal", mr.Terminal, "partial", mr.Partial, "risk", le.RiskScore)
 		}
-		if r.IsTerminal() {
+		if mr.Terminal {
 			break
+		}
+	}
+	// Only part of the leaf was allowed and nothing decided the rest: use the
+	// default action so that another leaf's allow cannot carry it either.
+	if le.Decision == nil && open < len(units) {
+		def := e.Policy.DefaultAction
+		le.Decision = &CandidateAction{
+			ActionName:      def,
+			EffectiveAction: e.effective(def),
+			Reason:          "only part of the command matched an allow rule; default action applied",
 		}
 	}
 	return le, nil
