@@ -230,6 +230,19 @@ func (a *Analyzer) appendRedirectOps(sc *ir.SimpleCommand, redirects []ir.Redire
 				Dynamic:    r.Target.Confidence != ir.ConfStatic,
 				Context:    ctx,
 			})
+		case ir.RedirDupOut:
+			// `>& file` is bash shorthand for `&> file`; only `>&2`, `>&-`
+			// and `>&3-` duplicate or close a descriptor.
+			if isFDTarget(r.Target) {
+				continue
+			}
+			sc.Operations = append(sc.Operations, ir.ResourceOp{
+				Type:       ir.OpFileWrite,
+				Paths:      []ir.NormalizedPath{a.Resolver.Resolve(r.Target)},
+				Confidence: r.Target.Confidence,
+				Dynamic:    r.Target.Confidence != ir.ConfStatic,
+				Context:    ctx,
+			})
 		case ir.RedirOut, ir.RedirClobber, ir.RedirReadWrite:
 			sc.Operations = append(sc.Operations, ir.ResourceOp{
 				Type:       ir.OpFileWrite,
@@ -263,6 +276,24 @@ func isStreamDevice(v ir.ArgValue) bool {
 		return true
 	}
 	return false
+}
+
+// isFDTarget reports a `>&` target that names a file descriptor (`2`, `-`,
+// `3-`) rather than a file. Dynamic targets are treated as files.
+func isFDTarget(v ir.ArgValue) bool {
+	if v.Confidence != ir.ConfStatic {
+		return false
+	}
+	s := strings.TrimSuffix(v.Value, "-")
+	if s == "" {
+		return v.Value == "-"
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // AnalyzeText is a convenience helper: parse + analyze.

@@ -129,6 +129,21 @@ func TestAnalyzeStreamDeviceRedirectsAreNotFileOps(t *testing.T) {
 	requireOp(t, echo, ir.OpFileWrite)
 }
 
+func TestAnalyzeDupRedirectToFileIsWrite(t *testing.T) {
+	root := analyzeForTest(t, `cat README.md >& out.txt`)
+	write := requireOp(t, requireProgram(t, root, "cat"), ir.OpFileWrite)
+	if got := rawPaths(write.Paths); !reflect.DeepEqual(got, []string{"out.txt"}) {
+		t.Fatalf(">& file path mismatch: got %#v", got)
+	}
+
+	for _, command := range []string{`ls 2>&1`, `ls >&2`, `ls 3>&-`, `ls 4>&3-`} {
+		root := analyzeForTest(t, command)
+		if ops := opsOfType(requireProgram(t, root, "ls"), ir.OpFileWrite); len(ops) != 0 {
+			t.Fatalf("%s: descriptor duplication recorded as file write: %#v", command, ops)
+		}
+	}
+}
+
 func TestAnalyzeNestedWrappersPropagatePrivilegeAndDynamicArgs(t *testing.T) {
 	root := analyzeForTest(t, `sudo env FOO=bar bash -c 'rm -rf "$TARGET"'`)
 	rm := requireProgram(t, root, "rm")

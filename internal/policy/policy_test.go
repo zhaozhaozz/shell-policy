@@ -235,6 +235,8 @@ func TestAllowMustCoverEveryOperation(t *testing.T) {
 		{"second path outside workspace", `cat README.md /etc/passwd`, "ask", EffectAsk},
 		{"system path after a workspace path", `rm -rf build /etc`, "deny_destructive", EffectDeny},
 		{"stream device redirect stays readonly", `ls missing 2>/dev/null`, "allow_readonly", EffectAllow},
+		{"dup redirect into system path", `cat README.md >& /etc/hosts`, "ask", EffectAsk},
+		{"descriptor duplication stays readonly", `ls missing 2>&1`, "allow_readonly", EffectAllow},
 	}
 
 	for _, tc := range cases {
