@@ -34,6 +34,84 @@ func TestAnalyzePipelineRedirectsAndSecretNetworkFlow(t *testing.T) {
 	}
 }
 
+func TestAnalyzeRedirectsOnWrappersAndCompoundCommands(t *testing.T) {
+	cases := []struct {
+		name    string
+		command string
+		program string
+		opType  ir.OpType
+		path    string
+	}{
+		{
+			name:    "shell wrapper output redirect",
+			command: `bash -c "echo hi" > out.txt`,
+			program: "bash",
+			opType:  ir.OpFileWrite,
+			path:    "out.txt",
+		},
+		{
+			name:    "shell wrapper append redirect",
+			command: `bash -c "echo hi" >> out.txt`,
+			program: "bash",
+			opType:  ir.OpFileAppend,
+			path:    "out.txt",
+		},
+		{
+			name:    "sudo wrapper output redirect",
+			command: `sudo echo hi > out.txt`,
+			program: "sudo",
+			opType:  ir.OpFileWrite,
+			path:    "out.txt",
+		},
+		{
+			name:    "subshell output redirect",
+			command: `(echo hi) > out.txt`,
+			program: "echo",
+			opType:  ir.OpFileWrite,
+			path:    "out.txt",
+		},
+		{
+			name:    "subshell append redirect",
+			command: `(echo hi) >> out.txt`,
+			program: "echo",
+			opType:  ir.OpFileAppend,
+			path:    "out.txt",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := analyzeForTest(t, tc.command)
+			cmd := requireProgram(t, root, tc.program)
+			op := requireOp(t, cmd, tc.opType)
+			if got := rawPaths(op.Paths); !reflect.DeepEqual(got, []string{tc.path}) {
+				t.Fatalf("redirect path mismatch: got %#v, want [%q]", got, tc.path)
+			}
+		})
+	}
+}
+
+func TestAnalyzeShellCUsesRecursiveBashParsing(t *testing.T) {
+	root := analyzeForTest(t, `bash -c 'printf x | grep x > inner.txt'`)
+
+	bash := requireProgram(t, root, "bash")
+	if bash.Simple.Wrapper == nil || bash.Simple.Wrapper.Type != "shell_c" {
+		t.Fatalf("bash -c wrapper not detected: %#v", bash.Simple.Wrapper)
+	}
+	if bash.Simple.Wrapper.InnerCommand == nil || bash.Simple.Wrapper.InnerCommand.Kind != ir.KindPipeline {
+		t.Fatalf("bash -c inner command should be parsed as a pipeline, got %#v", bash.Simple.Wrapper.InnerCommand)
+	}
+
+	grep := requireProgram(t, root, "grep")
+	if !grep.Context.InPipeline {
+		t.Fatal("grep inside bash -c pipeline should inherit pipeline context")
+	}
+	write := requireOp(t, grep, ir.OpFileWrite)
+	if got := rawPaths(write.Paths); !reflect.DeepEqual(got, []string{"inner.txt"}) {
+		t.Fatalf("inner redirect path mismatch: got %#v", got)
+	}
+}
+
 func TestAnalyzeNestedWrappersPropagatePrivilegeAndDynamicArgs(t *testing.T) {
 	root := analyzeForTest(t, `sudo env FOO=bar bash -c 'rm -rf "$TARGET"'`)
 	rm := requireProgram(t, root, "rm")

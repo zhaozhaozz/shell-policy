@@ -27,6 +27,9 @@ func TestDefaultPolicyDecisionsForRepresentativeCommands(t *testing.T) {
 		{name: "container readonly command", command: `docker exec -it app cat /tmp/log`, decision: "ask_container", effective: EffectAsk, matchedRuleID: "ask-container-exec"},
 		{name: "inline language eval", command: `python -c 'print(1)'`, decision: "deny_inline_eval", effective: EffectDeny, matchedRuleID: "deny-inline-eval"},
 		{name: "workspace redirect write", command: `echo hi > out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
+		{name: "workspace redirect append", command: `echo hi >> out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
+		{name: "wrapper redirect write", command: `bash -c "echo hi" > out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
+		{name: "subshell redirect write", command: `(echo hi) > out.txt`, decision: "ask_workspace_write", effective: EffectAsk, matchedRuleID: "ask-workspace-write"},
 	}
 
 	for _, tc := range cases {

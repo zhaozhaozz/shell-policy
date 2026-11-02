@@ -55,6 +55,7 @@ func (a *Analyzer) analyzeNode(c *ir.Command, ctx ir.Context) {
 	if c.Simple != nil && c.Simple.Wrapper != nil && c.Simple.Wrapper.InnerCommand != nil {
 		a.analyzeNode(c.Simple.Wrapper.InnerCommand, c.Context)
 	}
+	a.applyCompoundRedirectOps(c)
 }
 
 // mergeContext keeps the more permissive (more specific) flags set.
@@ -140,6 +141,7 @@ func (a *Analyzer) analyzeSimple(c *ir.Command) {
 				Context:    c.Context,
 			})
 		}
+		a.applyRedirectOps(c)
 		return
 	}
 
@@ -182,31 +184,64 @@ func (a *Analyzer) applyRedirectOps(c *ir.Command) {
 	if c.Simple == nil {
 		return
 	}
-	for _, r := range c.Redirects {
+	a.appendRedirectOps(c.Simple, c.Redirects, c.Context)
+}
+
+func (a *Analyzer) applyCompoundRedirectOps(c *ir.Command) {
+	if c == nil || c.Kind == ir.KindSimple || len(c.Redirects) == 0 {
+		return
+	}
+	sink := firstSimpleLeaf(c)
+	if sink == nil || sink.Simple == nil {
+		return
+	}
+	a.appendRedirectOps(sink.Simple, c.Redirects, sink.Context)
+}
+
+func firstSimpleLeaf(c *ir.Command) *ir.Command {
+	if c == nil {
+		return nil
+	}
+	if c.Kind == ir.KindSimple && c.Simple != nil {
+		return c
+	}
+	for _, child := range c.Children {
+		if leaf := firstSimpleLeaf(child); leaf != nil {
+			return leaf
+		}
+	}
+	if c.Simple != nil && c.Simple.Wrapper != nil && c.Simple.Wrapper.InnerCommand != nil {
+		return firstSimpleLeaf(c.Simple.Wrapper.InnerCommand)
+	}
+	return nil
+}
+
+func (a *Analyzer) appendRedirectOps(sc *ir.SimpleCommand, redirects []ir.Redirect, ctx ir.Context) {
+	for _, r := range redirects {
 		switch r.Op {
 		case ir.RedirIn, ir.RedirHeredoc:
-			c.Simple.Operations = append(c.Simple.Operations, ir.ResourceOp{
+			sc.Operations = append(sc.Operations, ir.ResourceOp{
 				Type:       ir.OpFileRead,
 				Paths:      []ir.NormalizedPath{a.Resolver.Resolve(r.Target)},
 				Confidence: r.Target.Confidence,
 				Dynamic:    r.Target.Confidence != ir.ConfStatic,
-				Context:    c.Context,
+				Context:    ctx,
 			})
 		case ir.RedirOut, ir.RedirClobber, ir.RedirReadWrite:
-			c.Simple.Operations = append(c.Simple.Operations, ir.ResourceOp{
+			sc.Operations = append(sc.Operations, ir.ResourceOp{
 				Type:       ir.OpFileWrite,
 				Paths:      []ir.NormalizedPath{a.Resolver.Resolve(r.Target)},
 				Confidence: r.Target.Confidence,
 				Dynamic:    r.Target.Confidence != ir.ConfStatic,
-				Context:    c.Context,
+				Context:    ctx,
 			})
 		case ir.RedirAppend:
-			c.Simple.Operations = append(c.Simple.Operations, ir.ResourceOp{
+			sc.Operations = append(sc.Operations, ir.ResourceOp{
 				Type:       ir.OpFileAppend,
 				Paths:      []ir.NormalizedPath{a.Resolver.Resolve(r.Target)},
 				Confidence: r.Target.Confidence,
 				Dynamic:    r.Target.Confidence != ir.ConfStatic,
-				Context:    c.Context,
+				Context:    ctx,
 			})
 		}
 	}
