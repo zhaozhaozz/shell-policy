@@ -111,3 +111,49 @@ func TestResolverNoWritableRootsMeansNothingWritable(t *testing.T) {
 		t.Fatalf("expected no path to be writable when WritableRoots is empty")
 	}
 }
+
+func TestMatchSensitive(t *testing.T) {
+	cases := []struct {
+		pattern, path, home string
+		want                bool
+	}{
+		{"~/.aws/", "/home/alice/.aws/credentials", "/home/alice", true},
+		{"~/.aws/", "/home/alice/.aws", "/home/alice", true},
+		{"~/.aws/", "/srv/.aws/credentials", "/home/alice", false},
+		{"~/.aws/", "~/.aws/config", "", true},
+		{"~/.kube/config", "/home/alice/.kube/config", "/home/alice", true},
+		{"~/.kube/config", "/home/alice/.kube/cache", "/home/alice", false},
+		{"/etc/app/secrets/", "/etc/app/secrets/db.yml", "", true},
+		{"/etc/app/secrets/", "/opt/etc/app/secrets/db.yml", "", false},
+		{".env", "/repo/.env", "", true},
+		{".env", "/repo/.env/x", "", true},
+		{".env", "/repo/.envrc", "", false},
+		{".env.*", "/repo/.env.local", "", true},
+		{"*.pem", "/repo/certs/server.pem", "", true},
+		{"*.pem", "certs/server.pem", "", true},
+		{"config/secrets.yml", "/repo/config/secrets.yml", "", true},
+		{"config/secrets.yml", "/repo/secrets.yml", "", false},
+		{"*.key", "/repo/keys", "", false},
+	}
+	for _, tc := range cases {
+		if got := MatchSensitive(tc.pattern, tc.path, tc.home); got != tc.want {
+			t.Errorf("MatchSensitive(%q, %q, %q) = %v, want %v", tc.pattern, tc.path, tc.home, got, tc.want)
+		}
+	}
+}
+
+func TestResolverSensitivePaths(t *testing.T) {
+	r := &Resolver{Cwd: "/work/project", WorkspaceRoots: []string{"/work/project"}, Home: "/home/alice",
+		SensitivePaths: []string{"~/.config/gh/", "*.sqlite", "deploy/vars.yml"}}
+	for _, raw := range []string{"~/.config/gh/hosts.yml", "data/app.sqlite", "deploy/vars.yml", "/home/alice/.config/gh/*"} {
+		if got := r.ResolveString(raw); !got.SecretCandidate || got.Scope != ir.ScopeSecretCandidate {
+			t.Errorf("%s should be sensitive: %+v", raw, got)
+		}
+	}
+	if got := r.ResolveString("data/app.db"); got.SecretCandidate {
+		t.Errorf("data/app.db should not be sensitive")
+	}
+	if ValidSensitivePattern("[") || !ValidSensitivePattern("~/.aws/") || ValidSensitivePattern(" ") {
+		t.Error("ValidSensitivePattern mismatch")
+	}
+}

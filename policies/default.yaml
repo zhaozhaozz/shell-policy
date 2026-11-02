@@ -13,6 +13,10 @@ policy:
   #     - "/home/me/project/build"
   #     - "/home/me/project/.cache"
   writableDirs: []
+  # sensitivePaths adds secret-like paths on top of the built-in list
+  # (.env, .ssh/, *.pem, ...). Entries are path prefixes or globs matched per
+  # path component: "~/.aws/", "*.key", "/etc/myapp/secrets/", ".npmrc".
+  sensitivePaths: []
 
 # Actions are grouped into categories. Each category below has exactly one
 # named action, so a caller can switch a whole category between allow / ask /

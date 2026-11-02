@@ -27,6 +27,9 @@ type Resolver struct {
 	// get NormalizedPath.Writable = true so policy rules can auto-allow
 	// ordinary mutations there.
 	WritableRoots []string
+	// SensitivePaths adds secret-like path patterns on top of the built-in
+	// list (see MatchSensitive for the syntax).
+	SensitivePaths []string
 }
 
 // secretPatterns is the built-in list of paths considered secret-like.
@@ -85,7 +88,10 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 			np.Scope = r.classifyScope(prefix)
 			np.Writable = r.isWritable(prefix)
 		}
-		np.SecretCandidate = isSecretPath(raw)
+		np.SecretCandidate = r.isSecret(raw)
+		if prefix := globStaticPrefix(raw, r); prefix != "" && r.isSecret(prefix) {
+			np.SecretCandidate = true
+		}
 		if np.SecretCandidate {
 			np.Scope = ir.ScopeSecretCandidate
 		}
@@ -115,7 +121,7 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 			// Unknown working directory: the target cannot be located.
 			np.Normalized = filepath.Clean(val)
 			np.Scope = ir.ScopeUnknown
-			np.SecretCandidate = isSecretPath(np.Normalized) || isSecretPath(raw)
+			np.SecretCandidate = r.isSecret(np.Normalized) || r.isSecret(raw)
 			if np.SecretCandidate {
 				np.Scope = ir.ScopeSecretCandidate
 			}
@@ -127,7 +133,7 @@ func (r *Resolver) Resolve(v ir.ArgValue) ir.NormalizedPath {
 
 	np.Scope = r.classifyScope(np.Absolute)
 	np.Writable = r.isWritable(np.Absolute)
-	np.SecretCandidate = isSecretPath(np.Absolute) || isSecretPath(raw)
+	np.SecretCandidate = r.isSecret(np.Absolute) || r.isSecret(raw)
 	if np.SecretCandidate {
 		// Secret scope wins over generic scopes for downstream rules.
 		np.Scope = ir.ScopeSecretCandidate
@@ -257,6 +263,101 @@ func globStaticPrefix(raw string, r *Resolver) string {
 		return ""
 	}
 	return filepath.Clean(filepath.Join(r.Cwd, prefix))
+}
+
+// isSecret applies the built-in patterns and the resolver's SensitivePaths.
+func (r *Resolver) isSecret(p string) bool {
+	if p == "" {
+		return false
+	}
+	if isSecretPath(p) {
+		return true
+	}
+	for _, pat := range r.SensitivePaths {
+		if MatchSensitive(pat, p, r.Home) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchSensitive reports whether path p is covered by a sensitive-path
+// pattern. Patterns are matched component by component, each component may
+// be a glob (*, ?, [...]), and a match also covers everything below it:
+//
+//   - "/etc/app/secrets/" or "/etc/app/token" is anchored at the root;
+//   - "~/.aws/" is anchored at home (raw "~/..." paths match too when the
+//     home directory is unknown);
+//   - a pattern without a leading / or ~ matches at any depth: ".env",
+//     "*.pem", ".env.*", "config/secrets.yml".
+func MatchSensitive(pattern, p, home string) bool {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" || p == "" {
+		return false
+	}
+	anchored := false
+	switch {
+	case pattern == "~" || strings.HasPrefix(pattern, "~/"):
+		anchored = true
+		if home != "" {
+			pattern = filepath.Join(home, strings.TrimPrefix(pattern, "~"))
+		}
+	case strings.HasPrefix(pattern, "/"):
+		anchored = true
+	}
+	pc := splitComponents(pattern)
+	xc := splitComponents(p)
+	if len(pc) == 0 {
+		return false
+	}
+	last := len(xc) - len(pc)
+	if anchored && last > 0 {
+		last = 0
+	}
+	for start := 0; start <= last; start++ {
+		if matchComponents(pc, xc[start:start+len(pc)]) {
+			return true
+		}
+	}
+	return false
+}
+
+// splitComponents splits a path into its non-empty components; a leading
+// "/" becomes a "/" component so anchored patterns only match from the root.
+func splitComponents(p string) []string {
+	var out []string
+	if strings.HasPrefix(p, "/") {
+		out = append(out, "/")
+	}
+	for _, c := range strings.Split(p, "/") {
+		if c != "" && c != "." {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func matchComponents(pat, comps []string) bool {
+	for i := range pat {
+		if ok, err := filepath.Match(pat[i], comps[i]); err != nil || !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidSensitivePattern reports whether every component of pattern is a
+// well-formed glob.
+func ValidSensitivePattern(pattern string) bool {
+	if strings.TrimSpace(pattern) == "" {
+		return false
+	}
+	for _, c := range splitComponents(pattern) {
+		if _, err := filepath.Match(c, ""); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func isSecretPath(p string) bool {

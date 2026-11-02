@@ -81,6 +81,8 @@ Common flags:
   --workspace <path>       Workspace root (repeatable). Default: cwd.
   --writable <path>        Writable directory root (repeatable). Ordinary
                            mutations inside these dirs can be auto-allowed.
+  --sensitive <pattern>    Extra sensitive path pattern (repeatable), e.g.
+                           "~/.aws/" or "*.key". Added to the built-in list.
   --home <path>            HOME for ~/ expansion (default: $HOME).
   --json                   Emit JSON output.
   --log-level <level>      Diagnostic log level: debug|info|warn|error|off
@@ -98,6 +100,7 @@ type commonFlags struct {
 	cwd        string
 	workspace  multiFlag
 	writable   multiFlag
+	sensitive  multiFlag
 	home       string
 	jsonOut    bool
 	logLevel   string
@@ -110,6 +113,7 @@ func setupCommon(fs *flag.FlagSet) *commonFlags {
 	fs.StringVar(&cf.cwd, "cwd", "", "working directory")
 	fs.Var(&cf.workspace, "workspace", "workspace root (repeatable)")
 	fs.Var(&cf.writable, "writable", "writable directory root (repeatable)")
+	fs.Var(&cf.sensitive, "sensitive", "extra sensitive path pattern (repeatable)")
 	fs.StringVar(&cf.home, "home", "", "home directory")
 	fs.BoolVar(&cf.jsonOut, "json", false, "emit JSON")
 	fs.StringVar(&cf.logLevel, "log-level", "off", "diagnostic log level: debug|info|warn|error|off")
@@ -130,7 +134,8 @@ func (cf *commonFlags) resolver() *paths.Resolver {
 	if len(roots) == 0 {
 		roots = []string{cwd}
 	}
-	return &paths.Resolver{Cwd: cwd, WorkspaceRoots: roots, Home: home, WritableRoots: append([]string(nil), cf.writable...)}
+	return &paths.Resolver{Cwd: cwd, WorkspaceRoots: roots, Home: home,
+		WritableRoots: append([]string(nil), cf.writable...), SensitivePaths: append([]string(nil), cf.sensitive...)}
 }
 
 func (cf *commonFlags) loadPolicy() (*policy.Policy, error) {
@@ -237,6 +242,7 @@ func cmdEval(args []string, explain bool) int {
 	// Writable dirs declared in the policy supplement those passed on the
 	// command line, so an operator can ship the allowlist with the policy.
 	rsv.WritableRoots = append(rsv.WritableRoots, pol.WritableDirs...)
+	rsv.SensitivePaths = append(rsv.SensitivePaths, pol.SensitivePaths...)
 	pr, err := analyze.AnalyzeText(cmd, rsv)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "parse error:", err)
@@ -306,6 +312,7 @@ func cmdClaudeHook(args []string) int {
 	}
 	rsv := cf.resolver()
 	rsv.WritableRoots = append(rsv.WritableRoots, pol.WritableDirs...)
+	rsv.SensitivePaths = append(rsv.SensitivePaths, pol.SensitivePaths...)
 	pr, err := analyze.AnalyzeText(command, rsv)
 	if err != nil {
 		return emitHookDecision(claudehook.Decision{
@@ -388,6 +395,7 @@ func cmdCodexHook(args []string) int {
 	}
 	rsv := cf.resolver()
 	rsv.WritableRoots = append(rsv.WritableRoots, pol.WritableDirs...)
+	rsv.SensitivePaths = append(rsv.SensitivePaths, pol.SensitivePaths...)
 	pr, err := analyze.AnalyzeText(command, rsv)
 	if err != nil {
 		return emitCodexHookNoDecision("parse error: " + err.Error())

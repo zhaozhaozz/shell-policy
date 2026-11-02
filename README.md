@@ -55,6 +55,7 @@ go build -o bin/shell-policy ./cmd/shell-policy
 | `--cwd <path>` | 路径规范化的工作目录（默认 `$PWD`） |
 | `--workspace <path>` | 工作区根目录，可重复 |
 | `--writable <path>` | 可写目录根，可重复（见下文「可写目录自动放行」） |
+| `--sensitive <pattern>` | 追加敏感路径模式，可重复（见下文「追加敏感路径」） |
 | `--home <path>` | `~/` 展开用的 HOME（默认 `$HOME`） |
 | `--json` | 输出 JSON |
 | `--log-level <level>` | 诊断日志级别 `debug\|info\|warn\|error\|off`，写到 stderr |
@@ -385,6 +386,18 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
 - 远程 / 容器 / 提权（`ssh`、`docker exec`、`sudo`）上下文不放行。
 - 该规则的 `order` 在所有「硬 deny」规则之后，因此 `rm -rf /etc` 这类危险命令
   仍会被先行拦截。
+
+### 追加敏感路径
+
+内置的敏感路径识别（`.env`、`.ssh/`、`*.pem`、`*.key`、`.npmrc`、`.netrc` 等）始终生效。需要更多时，可以在策略文件的 `policy.sensitivePaths` 里写，或用 `--sensitive` 按调用追加（库调用方设置 `paths.Resolver.SensitivePaths`）。命中的路径和内置敏感路径一样：scope 为 `secret_candidate`，读取询问、写入不自动放行、外传拒绝。
+
+模式按路径分量逐段匹配，每段可以用 glob（`*`、`?`、`[...]`），命中某个目录也覆盖它下面的所有内容：
+
+| 写法 | 含义 |
+| --- | --- |
+| `~/.aws/`、`~/.kube/config` | 从 HOME 起锚定 |
+| `/etc/myapp/secrets/` | 从根目录起锚定 |
+| `.env.*`、`*.key`、`config/secrets.yml` | 不以 `/` 或 `~` 开头：在任意深度匹配 |
 
 ### 工作目录跟踪（`cd` / `pushd`）
 

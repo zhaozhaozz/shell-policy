@@ -150,7 +150,7 @@ func decide(command, cwd string) error {
 
 ## 4. 策略文件结构
 
-策略 YAML 顶层包含 `actions`、`rules`，可选 `defaultAction`、`writableDirs`：
+策略 YAML 顶层包含 `actions`、`rules`，可选 `defaultAction`、`writableDirs`、`sensitivePaths`（追加的敏感路径模式，写法见 README「追加敏感路径」）：
 
 ```yaml
 defaultAction: default    # 没有规则决定的 leaf 使用的 action

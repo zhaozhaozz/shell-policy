@@ -23,14 +23,18 @@ func Load(data []byte) (*Policy, error) {
 		return nil, err
 	}
 	p := &Policy{
-		ID:            raw.Policy.ID,
-		Name:          raw.Policy.Name,
-		DefaultAction: raw.Policy.DefaultAction,
-		WritableDirs:  raw.Policy.WritableDirs,
-		Actions:       map[string]*Action{},
+		ID:             raw.Policy.ID,
+		Name:           raw.Policy.Name,
+		DefaultAction:  raw.Policy.DefaultAction,
+		WritableDirs:   raw.Policy.WritableDirs,
+		SensitivePaths: raw.Policy.SensitivePaths,
+		Actions:        map[string]*Action{},
 	}
 	if len(p.WritableDirs) == 0 {
 		p.WritableDirs = raw.WritableDirs
+	}
+	if len(p.SensitivePaths) == 0 {
+		p.SensitivePaths = raw.SensitivePaths
 	}
 	if p.ID == "" {
 		// Allow flat layout where actions/rules sit at top level.
@@ -63,15 +67,17 @@ func Load(data []byte) (*Policy, error) {
 
 type rawPolicyDoc struct {
 	Policy struct {
-		ID            string   `yaml:"id"`
-		Name          string   `yaml:"name"`
-		DefaultAction string   `yaml:"defaultAction"`
-		WritableDirs  []string `yaml:"writableDirs"`
+		ID             string   `yaml:"id"`
+		Name           string   `yaml:"name"`
+		DefaultAction  string   `yaml:"defaultAction"`
+		WritableDirs   []string `yaml:"writableDirs"`
+		SensitivePaths []string `yaml:"sensitivePaths"`
 	} `yaml:"policy"`
-	ID            string             `yaml:"id"`
-	Name          string             `yaml:"name"`
-	DefaultAction string             `yaml:"defaultAction"`
-	WritableDirs  []string           `yaml:"writableDirs"`
-	Actions       map[string]*Action `yaml:"actions"`
-	Rules         []Rule             `yaml:"rules"`
+	ID             string             `yaml:"id"`
+	Name           string             `yaml:"name"`
+	DefaultAction  string             `yaml:"defaultAction"`
+	WritableDirs   []string           `yaml:"writableDirs"`
+	SensitivePaths []string           `yaml:"sensitivePaths"`
+	Actions        map[string]*Action `yaml:"actions"`
+	Rules          []Rule             `yaml:"rules"`
 }

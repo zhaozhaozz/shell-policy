@@ -17,6 +17,7 @@ import (
 	"sort"
 
 	"github.com/self/shell_permission/internal/ir"
+	"github.com/self/shell_permission/internal/paths"
 )
 
 // Mode is the rule mode.
@@ -92,9 +93,12 @@ type Policy struct {
 	// WritableDirs is an operator-managed allowlist of directories whose
 	// ordinary mutations may be auto-allowed by rules matching
 	// path.writable. The CLI feeds these into the path resolver.
-	WritableDirs []string           `json:"writableDirs,omitempty" yaml:"writableDirs,omitempty"`
-	Actions      map[string]*Action `json:"actions" yaml:"actions"`
-	Rules        []*Rule            `json:"rules" yaml:"rules"`
+	WritableDirs []string `json:"writableDirs,omitempty" yaml:"writableDirs,omitempty"`
+	// SensitivePaths adds secret-like path patterns (prefixes or globs, see
+	// paths.MatchSensitive) on top of the built-in list.
+	SensitivePaths []string           `json:"sensitivePaths,omitempty" yaml:"sensitivePaths,omitempty"`
+	Actions        map[string]*Action `json:"actions" yaml:"actions"`
+	Rules          []*Rule            `json:"rules" yaml:"rules"`
 }
 
 // EnsureSorted sorts rules by Order ascending while keeping declared
@@ -147,6 +151,11 @@ func (p *Policy) Validate() []error {
 			} else if _, ok := p.Actions[r.Action]; !ok {
 				errs = append(errs, fmt.Errorf("rule %q references unknown action %q", r.ID, r.Action))
 			}
+		}
+	}
+	for _, pat := range p.SensitivePaths {
+		if !paths.ValidSensitivePattern(pat) {
+			errs = append(errs, fmt.Errorf("sensitivePaths: invalid pattern %q", pat))
 		}
 	}
 	if p.DefaultAction == "" {

@@ -91,3 +91,16 @@ func TestDefaultPolicyAllowsCombinedReadonlyCommands(t *testing.T) {
 		t.Fatalf("decision = %s/%s, want allow; rules=%+v", res.Decision, res.EffectiveDecision, res.MatchedRules)
 	}
 }
+
+func TestSensitivePathsLoadAndValidate(t *testing.T) {
+	pol, err := Load([]byte("policy:\n  id: p\n  sensitivePaths: [\"~/.aws/\", \"*.key\"]\n"))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(pol.SensitivePaths) != 2 {
+		t.Fatalf("sensitivePaths = %v", pol.SensitivePaths)
+	}
+	if _, err := Load([]byte("policy:\n  id: p\n  sensitivePaths: [\"[\"]\n")); err == nil {
+		t.Fatal("an invalid glob should be rejected")
+	}
+}
