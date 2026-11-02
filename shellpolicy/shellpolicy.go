@@ -154,6 +154,10 @@ func (p *Policy) WithEffects(effects map[string]Effect) (*Policy, error) {
 	return &Policy{p: &cp}, nil
 }
 
+// ValidSensitivePattern reports whether pattern is a usable sensitive-path
+// pattern (see Env.SensitivePaths), so callers can reject it before saving.
+func ValidSensitivePattern(pattern string) bool { return paths.ValidSensitivePattern(pattern) }
+
 // Env is the per-call environment a command is evaluated in.
 type Env struct {
 	// Cwd is the directory the command starts in; empty means unknown, and
@@ -167,7 +171,10 @@ type Env struct {
 	// WritableDirs are where ordinary modifications are auto-allowed; the
 	// policy file's writableDirs are added.
 	WritableDirs []string
-	// SensitivePaths are added to the built-in and policy file patterns.
+	// SensitivePaths are added to the built-in and policy file patterns:
+	// path prefixes or globs matched per path component. "~/.aws/" and
+	// "/etc/app/secrets/" are anchored; ".env.*" or "*.key" match at any
+	// depth; a match also covers everything below it.
 	SensitivePaths []string
 }
 

@@ -185,3 +185,9 @@ func TestDefaultActions(t *testing.T) {
 		}
 	}
 }
+
+func TestValidSensitivePattern(t *testing.T) {
+	if !ValidSensitivePattern("~/.aws/") || ValidSensitivePattern("[") || ValidSensitivePattern("") {
+		t.Fatal("ValidSensitivePattern mismatch")
+	}
+}
