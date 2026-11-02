@@ -377,12 +377,19 @@ rules:
     reason: "Changing PATH, aliases, traps or defining functions changes what later commands run"
     terminal: false
 
+  # Only an exit in the shell itself ends the session; `(exit 3)` or
+  # `$(exit 1)` leave it running.
   - id: "ask-shell-exit"
     mode: "decide"
     order: 1140
     match:
-      command.program:
-        in: ["exit", "logout"]
+      all:
+        - command.program:
+            in: ["exit", "logout"]
+        - context.inSubshell:
+            equals: false
+        - context.inCommandSubstitution:
+            equals: false
     action: "ask"
     reason: "Exiting the shell ends the session"
     terminal: false

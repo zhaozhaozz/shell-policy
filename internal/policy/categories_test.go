@@ -50,6 +50,8 @@ func TestDefaultPolicyCategories(t *testing.T) {
 		{`alias ls='rm -rf ~'`, "ask"},
 		{`f() { :; }; f`, "ask"},
 		{`exit`, "ask"},
+		{`(exit 3)`, "default"},
+		{`x=$(exit 1)`, "default"},
 		// Other categories.
 		{`curl -s https://example.com`, "ask_network"},
 		{`ssh host`, "ask_remote"},
