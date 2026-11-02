@@ -20,6 +20,19 @@ var sensitiveVars = map[string]bool{
 	"precmd_functions": true, "preexec_functions": true, "chpwd_functions": true,
 	"LD_PRELOAD": true, "LD_LIBRARY_PATH": true, "LD_AUDIT": true,
 	"DYLD_INSERT_LIBRARIES": true, "DYLD_LIBRARY_PATH": true,
+	// Programs that tools start on their own: a pager, editor, diff or ssh
+	// command makes `git log` or `less` run anything.
+	"PAGER": true, "GIT_PAGER": true, "MANPAGER": true, "SYSTEMD_PAGER": true, "LESSOPEN": true, "LESSCLOSE": true,
+	"EDITOR": true, "VISUAL": true, "GIT_EDITOR": true, "GIT_SEQUENCE_EDITOR": true, "GIT_EXTERNAL_DIFF": true,
+	"GIT_SSH": true, "GIT_SSH_COMMAND": true, "GIT_ASKPASS": true, "SSH_ASKPASS": true, "GIT_EXEC_PATH": true,
+	"GIT_TEMPLATE_DIR": true, "BROWSER": true, "RIPGREP_CONFIG_PATH": true, "GCONV_PATH": true,
+	"PERL5OPT": true, "PERL5LIB": true, "PYTHONSTARTUP": true, "NODE_OPTIONS": true, "RUBYOPT": true,
+}
+
+// isSensitiveVar also covers families of variables: GIT_CONFIG*, which
+// inject git configuration (core.pager, hooks ...).
+func isSensitiveVar(name string) bool {
+	return sensitiveVars[name] || strings.HasPrefix(name, "GIT_CONFIG")
 }
 
 // shellConfigOp records a change to shell state; target names what changed.
@@ -32,7 +45,7 @@ func shellConfigOp(c *ir.Command, target string) ir.ResourceOp {
 func assignmentOps(c *ir.Command) []ir.ResourceOp {
 	var ops []ir.ResourceOp
 	for _, as := range c.Simple.Assignments {
-		if sensitiveVars[as.Name] {
+		if isSensitiveVar(as.Name) {
 			ops = append(ops, shellConfigOp(c, as.Name))
 		}
 	}
@@ -55,7 +68,7 @@ func varNameOps(c *ir.Command, args []ir.ArgValue) []ir.ResourceOp {
 		if strings.HasPrefix(name, "-") || strings.HasPrefix(name, "+") {
 			continue // option such as -x or +x
 		}
-		if sensitiveVars[name] {
+		if isSensitiveVar(name) {
 			ops = append(ops, shellConfigOp(c, name))
 		}
 	}

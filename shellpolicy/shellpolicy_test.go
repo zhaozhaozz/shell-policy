@@ -203,3 +203,54 @@ func TestAuthoringGuide(t *testing.T) {
 		t.Fatal("AuthoringGuide must return a copy")
 	}
 }
+
+// TestReadOnlyNeedsProof covers commands that look read-only by program or
+// subcommand but write, delete or run other programs: they must not be
+// auto-allowed, while the genuinely read-only forms still are.
+func TestReadOnlyNeedsProof(t *testing.T) {
+	p := Default()
+	// Reads inside the workspace are allowed; nothing is writable, so a
+	// command recognized as a write or an exec is not auto-allowed.
+	e := Env{Cwd: work, Home: "/home/alice", WorkspaceRoots: []string{work}}
+	notAllowed := []string{
+		"git config --global core.editor vim", "git config core.pager less", "git branch -D main", "git branch newname",
+		"git tag -d v1", "git tag v2", "git stash clear", "git stash", "git remote add o https://x",
+		"git -c core.pager='touch /x' log", "git diff --output=/etc/x", "git log --output /tmp/x",
+		"git grep -O vim foo", "docker image rm example:latest", "docker image prune -af",
+		"docker container rm c1", "docker system prune -f", "rg --pre 'touch /x' token README.md",
+		"GIT_PAGER='touch /x' git log", "PAGER='touch /x' git log", "GIT_EXTERNAL_DIFF=/tmp/x git diff",
+		"RIPGREP_CONFIG_PATH=/tmp/cfg rg foo README.md", "GIT_CONFIG_COUNT=1 git log", "LC_ALL=C grep foo README.md",
+	}
+	for _, c := range notAllowed {
+		if res := eval(t, p, c, e); res.Effect == Allow {
+			t.Errorf("%q must not be auto-allowed: %s/%s (%s)", c, res.Effect, res.Action, res.RuleID)
+		}
+	}
+	allowed := []string{
+		"git status", "git log --oneline -5", "git diff HEAD~1", "git branch", "git branch -a", "git branch --contains abc",
+		"git tag", "git tag -l 'v*'", "git stash list", "git stash show -p", "git config user.name",
+		"git config --get user.email", "git config --list", "git remote -v", "git reflog",
+		"docker ps -a", "docker image ls", "docker container inspect c1", "docker system df", "rg foo README.md",
+	}
+	for _, c := range allowed {
+		if res := eval(t, p, c, e); res.Effect != Allow {
+			t.Errorf("%q should stay allowed: %s/%s (%s)", c, res.Effect, res.Action, res.Reason)
+		}
+	}
+	// With the repository writable, ordinary git writes are allowed like any
+	// write there, but not .git/config or hooks, which decide what later git
+	// commands run, nor a global config write in HOME.
+	w := Env{Cwd: work, Home: "/home/alice", WritableDirs: []string{work}}
+	for c, want := range map[string]Effect{
+		"git branch -D main":               Allow,
+		"git commit -m x":                  Allow,
+		"git config user.name alice":       Ask,
+		"git config core.pager 'touch /x'": Ask,
+		"echo x > .git/hooks/pre-commit":   Ask,
+		"git config --global user.name x":  Ask,
+	} {
+		if res := eval(t, p, c, w); res.Effect != want {
+			t.Errorf("%q in a writable repo: %s/%s, want %s", c, res.Effect, res.Action, want)
+		}
+	}
+}

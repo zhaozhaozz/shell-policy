@@ -206,6 +206,12 @@ func lookupField(field string, ctx *matchCtx) (any, bool) {
 		if ctx.cmd != nil && ctx.cmd.Simple != nil {
 			return strings.Join(ctx.cmd.Simple.Subcommand, " "), len(ctx.cmd.Simple.Subcommand) > 0
 		}
+	case field == "command.hasAssignments":
+		// NAME=value before the program changes its environment, which can
+		// change what a "read-only" tool does (RIPGREP_CONFIG_PATH, ...).
+		if ctx.cmd != nil && ctx.cmd.Simple != nil {
+			return len(ctx.cmd.Simple.Assignments) > 0, true
+		}
 	case field == "command.hasDynamicArgs":
 		if ctx.cmd != nil && ctx.cmd.Simple != nil {
 			return ctx.cmd.Simple.HasDynamicArgs, true
@@ -570,7 +576,7 @@ func numCompare(a, b any, op string) (bool, error) {
 var knownFields = map[string]bool{
 	"tags": true, "riskScore": true, "argv": true,
 	"command.program": true, "command.subcommand": true, "command.subcommandString": true,
-	"command.hasDynamicArgs": true, "command.wrapperType": true,
+	"command.hasDynamicArgs": true, "command.wrapperType": true, "command.hasAssignments": true,
 	"operation.type": true, "operation.target": true, "operation.dynamic": true,
 	"path.scope": true, "path.secretCandidate": true, "path.writable": true, "path.absolute": true,
 	"path.normalized": true, "path.normalizedRegex": true, "path.raw": true, "path.rawRegex": true,

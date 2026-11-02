@@ -1,29 +1,14 @@
 package analyze
 
 import (
+	"strings"
+
 	"github.com/self/shell_permission/internal/argv"
 	"github.com/self/shell_permission/internal/ir"
 	"github.com/self/shell_permission/internal/paths"
 )
 
 func init() {
-	// gitReadSubs is the set of git subcommands that only read state.
-	gitReadSubs := map[string]bool{
-		"status": true, "diff": true, "log": true, "show": true,
-		"rev-parse": true, "ls-files": true, "ls-tree": true, "blame": true,
-		"branch": true, "tag": true, "remote": true, "config": true,
-		"describe": true, "stash": true, "shortlog": true,
-	}
-	gitWriteSubs := map[string]bool{
-		"add": true, "commit": true, "checkout": true, "restore": true,
-		"reset": true, "rm": true, "mv": true, "merge": true, "rebase": true,
-		"cherry-pick": true, "revert": true, "clean": true, "switch": true,
-		"apply": true, "am": true, "init": true,
-	}
-	gitNetworkSubs := map[string]bool{
-		"push": true, "pull": true, "fetch": true, "clone": true, "remote": true,
-	}
-
 	register([]string{"git"}, &commandSpec{
 		Argv: argv.Spec{
 			StopAtFirstPositional: true,
@@ -33,6 +18,10 @@ func init() {
 				"workTree": {Names: []string{"--work-tree"}, TakesValue: true},
 				"version":  {Names: []string{"--version"}},
 				"help":     {Names: []string{"-h", "--help"}},
+				"noPager":  {Names: []string{"--no-pager", "-P"}},
+				// -c / --config-env can set core.pager, hooks and other
+				// commands git runs: the command is no longer read-only.
+				"config": {Names: []string{"-c", "--config-env"}, TakesValue: true, Repeatable: true},
 			},
 		},
 		Subcommand: func(p *argv.Parsed) []string {
@@ -61,63 +50,39 @@ func init() {
 			}
 			repoPaths := []ir.NormalizedPath{repo}
 
+			op := func(t ir.OpType, paths []ir.NormalizedPath) ir.ResourceOp {
+				return ir.ResourceOp{Type: t, Paths: paths, Subcommand: []string{"git", sub}, Confidence: confOf(c.Simple), Context: c.Context}
+			}
+			// Options before the subcommand other than the known safe ones
+			// (for example -c, --exec-path) can make git run other programs.
+			if p.Flags["config"] != nil || len(p.RawFlags) > 0 {
+				return []ir.ResourceOp{op(ir.OpUnknown, nil)}
+			}
+
 			ops := []ir.ResourceOp{}
-			switch {
-			case sub == "":
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpGitRead,
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
-			case gitNetworkSubs[sub]:
+			switch kind := gitKind(sub, rest); kind {
+			case "read":
+				ops = append(ops, op(ir.OpGitRead, nil))
+			case "network":
 				opType := ir.OpNetworkWrite
-				if sub == "fetch" || sub == "pull" || sub == "clone" {
+				if sub == "fetch" || sub == "pull" || sub == "clone" || sub == "remote" {
 					opType = ir.OpNetworkRead
 				}
-				ops = append(ops, ir.ResourceOp{
-					Type:       opType,
-					Subcommand: []string{"git", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpGitWrite,
-					Paths:      repoPaths,
-					Subcommand: []string{"git", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
-			case gitWriteSubs[sub]:
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpGitWrite,
-					Paths:      repoPaths,
-					Subcommand: []string{"git", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
+				ops = append(ops, op(opType, nil), op(ir.OpGitWrite, repoPaths))
+			case "write":
+				ops = append(ops, op(ir.OpGitWrite, repoPaths))
 				if sub == "clean" || sub == "rm" {
-					ops = append(ops, ir.ResourceOp{
-						Type:       ir.OpFileDelete,
-						Paths:      repoPaths,
-						Subcommand: []string{"git", sub},
-						Confidence: confOf(c.Simple),
-						Context:    c.Context,
-					})
+					ops = append(ops, op(ir.OpFileDelete, repoPaths))
 				}
-			case gitReadSubs[sub]:
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpGitRead,
-					Subcommand: []string{"git", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
+			case "config":
+				// git config writes the file of its scope.
+				ops = append(ops, op(ir.OpFileWrite, []ir.NormalizedPath{gitConfigFile(rest, repo, r)}))
 			default:
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpUnknown,
-					Subcommand: []string{"git", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
+				ops = append(ops, op(ir.OpUnknown, nil))
+			}
+			// --output writes a file wherever it points (log, diff, show ...).
+			if out := gitOutputArg(rest); out != nil {
+				ops = append(ops, op(ir.OpFileWrite, pathsFromArgs([]ir.ArgValue{*out}, r)))
 			}
 			// Surface flags after the subcommand for downstream rule
 			// matching (e.g. `git push --force`).
@@ -165,50 +130,62 @@ func init() {
 			if len(p.Positionals) > 0 {
 				sub = p.Positionals[0].Value
 			}
-			readSubs := map[string]bool{
-				"ps": true, "images": true, "image": true, "inspect": true,
-				"version": true, "info": true, "history": true, "port": true,
-				"logs": true, "stats": true, "top": true, "diff": true,
-			}
-			writeSubs := map[string]bool{
-				"rm": true, "rmi": true, "kill": true, "stop": true, "start": true,
-				"restart": true, "pause": true, "unpause": true, "create": true,
-				"build": true, "tag": true, "push": true, "pull": true, "cp": true,
-				"commit": true,
+			op := func(t ir.OpType) ir.ResourceOp {
+				return ir.ResourceOp{Type: t, Subcommand: []string{"docker", sub}, Confidence: confOf(c.Simple), Context: c.Context}
 			}
 			ops := []ir.ResourceOp{}
-			switch {
-			case readSubs[sub]:
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpContainerRead,
-					Subcommand: []string{"docker", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
-			case writeSubs[sub]:
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpContainerWrite,
-					Subcommand: []string{"docker", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
-			case sub == "system":
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpContainerWrite,
-					Subcommand: []string{"docker", "system"},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
+			switch dockerKind(staticArgs(p.Positionals)) {
+			case "read":
+				ops = append(ops, op(ir.OpContainerRead))
+			case "write":
+				ops = append(ops, op(ir.OpContainerWrite))
 			default:
 				// `exec` and `run` are handled by the wrapper detector.
-				ops = append(ops, ir.ResourceOp{
-					Type:       ir.OpUnknown,
-					Subcommand: []string{"docker", sub},
-					Confidence: confOf(c.Simple),
-					Context:    c.Context,
-				})
+				ops = append(ops, op(ir.OpUnknown))
 			}
 			return ops
 		},
 	})
+}
+
+// dockerReadTop are top-level docker commands that only read.
+var dockerReadTop = set("ps", "images", "inspect", "version", "info", "history", "port", "logs", "stats", "top", "diff", "events")
+
+var dockerWriteTop = set("rm", "rmi", "kill", "stop", "start", "restart", "pause", "unpause", "create", "build",
+	"tag", "push", "pull", "cp", "commit", "rename", "update", "load", "import", "save", "export", "login", "logout", "attach", "wait")
+
+// dockerReadVerbs are the read-only verbs of management commands
+// (docker image ls, docker container inspect, docker system df ...).
+var dockerReadVerbs = set("ls", "list", "inspect", "history", "logs", "top", "port", "diff", "stats", "df", "info", "events", "ps", "config", "images", "version")
+
+var dockerManagement = set("image", "container", "network", "volume", "system", "builder", "buildx", "compose",
+	"context", "plugin", "secret", "config", "node", "service", "stack", "trust", "manifest")
+
+// dockerKind classifies a docker / podman command line as "read",
+// "write" or "" (unknown). Management commands are judged by their verb:
+// `docker image ls` reads, `docker image prune` writes.
+func dockerKind(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	sub := args[0]
+	switch {
+	case dockerReadTop[sub]:
+		return "read"
+	case dockerWriteTop[sub]:
+		return "write"
+	case dockerManagement[sub]:
+		verb := ""
+		for _, a := range args[1:] {
+			if a != "" && !strings.HasPrefix(a, "-") {
+				verb = a
+				break
+			}
+		}
+		if dockerReadVerbs[verb] {
+			return "read"
+		}
+		return "write"
+	}
+	return ""
 }

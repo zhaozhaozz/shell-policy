@@ -232,6 +232,7 @@ not: { ... }   # 取反
 | `command.subcommandString`    | string   | 子命令拼接成空格串                              |
 | `command.hasDynamicArgs`      | bool     | 是否含动态（变量/命令替换）参数                 |
 | `command.wrapperType`         | string   | 最外层 wrapper 类型，如 `sudo`/`ssh`/`docker`   |
+| `command.hasAssignments`      | bool     | 程序前是否带 `NAME=value` 环境变量赋值（会改变只读工具的行为，默认策略的只读放行要求为 false） |
 | `argv[N]`                     | string   | 第 N 个参数（argv[0] 是程序）                   |
 | `argv`                        | []string | 全部参数值                                      |
 | `flags.<name>`                | any      | 具名 flag 值，如 `flags.recursive`              |

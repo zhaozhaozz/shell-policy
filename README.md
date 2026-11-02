@@ -391,6 +391,16 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
 - 该规则的 `order` 在所有「硬 deny」规则之后，因此 `rm -rf /etc` 这类危险命令
   仍会被先行拦截。
 
+### 只读判定
+
+只读放行（`allow-bash-readonly`、`allow-git-readonly`、`allow-docker-readonly`）只给能确认不写、不删、不启动其他程序的参数组合：
+
+- git 按子命令和参数判断：`git branch` / `git tag` 只有列出时算只读，`-d`、`-D`、`-m` 或带新名字是写；`git stash` 只有 `list`、`show` 算只读；`git remote` 只有列出和 `get-url` 算只读；`git config` 只有读取（`--get`、`--list`、单个名字）算只读，写入记为对所在配置文件的写（`--global` 是 `~/.gitconfig`）；`--output` 记为文件写；带 `-c` / `--config-env` 等全局选项时整条命令按未知处理。
+- docker 的管理命令按动词判断：`docker image ls` 只读，`docker image rm` / `prune` 是写。
+- `rg --pre` 会对每个文件启动程序，记为 `process_exec`。
+- 程序前带环境变量赋值（`NAME=value cmd`）时不再按只读放行；`PAGER`、`GIT_PAGER`、`GIT_EXTERNAL_DIFF`、`EDITOR`、`LESSOPEN`、`GIT_CONFIG*` 等会让工具启动其他程序的变量记为 `shell_config`。
+- `.git/config` 和 `.git/hooks/` 视为敏感路径：它们决定之后的 git 命令运行哪些程序，写入不会因为在可写目录内而自动放行。
+
 ### 追加敏感路径
 
 内置的敏感路径识别（`.env`、`.ssh/`、`*.pem`、`*.key`、`.npmrc`、`.netrc` 等）始终生效。需要更多时，可以在策略文件的 `policy.sensitivePaths` 里写，或用 `--sensitive` 按调用追加（库调用方设置 `paths.Resolver.SensitivePaths`）。命中的路径和内置敏感路径一样：scope 为 `secret_candidate`，读取询问、写入不自动放行、外传拒绝。

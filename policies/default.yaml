@@ -463,6 +463,8 @@ rules:
             in: ["inside_workspace", "tmp"]
         - command.hasDynamicArgs:
             equals: false
+        - command.hasAssignments:
+            equals: false
         - context.inRemoteCommand:
             equals: false
         - context.inContainerCommand:
@@ -481,6 +483,8 @@ rules:
             equals: "git"
         - operation.type:
             equals: "git_read"
+        - command.hasAssignments:
+            equals: false
         - context.inRemoteCommand:
             equals: false
         - context.inContainerCommand:
@@ -499,6 +503,8 @@ rules:
             in: ["docker", "podman"]
         - operation.type:
             equals: "container_read"
+        - command.hasAssignments:
+            equals: false
         - context.inRemoteCommand:
             equals: false
         - context.inContainerCommand:

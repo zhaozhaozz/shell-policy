@@ -86,6 +86,9 @@ func init() {
 				"ignoreCase": {Names: []string{"-i", "--ignore-case"}},
 				"pattern":    {Names: []string{"-e", "--regexp"}, TakesValue: true, Repeatable: true},
 				"file":       {Names: []string{"-f", "--file"}, TakesValue: true},
+				// rg --pre runs a program on every file it searches.
+				"pre":     {Names: []string{"--pre"}, TakesValue: true},
+				"preGlob": {Names: []string{"--pre-glob"}, TakesValue: true},
 			},
 		},
 		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
@@ -94,17 +97,21 @@ func init() {
 			if _, ok := p.Flags["pattern"]; !ok && len(args) > 0 {
 				args = args[1:]
 			}
-			if len(args) == 0 {
-				return nil
+			var ops []ir.ResourceOp
+			if pre := stringFlag(p, "pre"); pre != "" || p.Flags["pre"] != nil {
+				ops = append(ops, ir.ResourceOp{Type: ir.OpProcessExec, Target: pre, Confidence: confOf(c.Simple), Context: c.Context})
 			}
-			return []ir.ResourceOp{{
+			if len(args) == 0 {
+				return ops
+			}
+			return append(ops, ir.ResourceOp{
 				Type:       ir.OpFileRead,
 				Paths:      pathsFromArgs(args, r),
 				Flags:      p.Flags,
 				Confidence: confOf(c.Simple),
 				Dynamic:    p.HasDynamic,
 				Context:    c.Context,
-			}}
+			})
 		},
 	})
 

@@ -51,6 +51,10 @@ var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(^|/)\.netrc$`),
 	regexp.MustCompile(`(^|/)credentials(\.json)?$`),
 	regexp.MustCompile(`(^|/)secret`),
+	// Git's own config and hooks decide which programs later git commands
+	// run (core.pager, hooks): writing them is not an ordinary edit.
+	regexp.MustCompile(`(^|/)\.git/config$`),
+	regexp.MustCompile(`(^|/)\.git/hooks(/|$)`),
 }
 
 // Resolve converts an ArgValue believed to be a path into a NormalizedPath.
