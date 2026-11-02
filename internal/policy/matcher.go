@@ -283,9 +283,19 @@ func lookupField(field string, ctx *matchCtx) (any, bool) {
 			}
 			return true, true
 		}
-	case field == "path.normalizedRegex" || field == "path.rawRegex":
-		// Handled inside applyOp via a marker-only return.
-		return field, true
+	case field == "path.absolute":
+		if ctx.path != nil {
+			return ctx.path.Absolute, ctx.path.Absolute != ""
+		}
+	case field == "path.normalized" || field == "path.normalizedRegex":
+		// path.normalizedRegex is the older spelling; use `regex` on it.
+		if ctx.path != nil {
+			return ctx.path.Normalized, ctx.path.Normalized != ""
+		}
+	case field == "path.raw" || field == "path.rawRegex":
+		if ctx.path != nil {
+			return ctx.path.Raw, true
+		}
 	case field == "context.inPipeline":
 		if ctx.cmd != nil {
 			return ctx.cmd.Context.InPipeline, true
@@ -313,6 +323,10 @@ func lookupField(field string, ctx *matchCtx) (any, bool) {
 	case field == "context.privilegeEscalated":
 		if ctx.cmd != nil {
 			return ctx.cmd.Context.PrivilegeEscalated, true
+		}
+	case field == "context.inFunction":
+		if ctx.cmd != nil {
+			return ctx.cmd.Context.InFunction, true
 		}
 	case field == "context.background":
 		if ctx.cmd != nil {

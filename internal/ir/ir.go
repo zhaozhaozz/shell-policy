@@ -95,7 +95,10 @@ type Context struct {
 	ContainerName         string `json:"containerName,omitempty"`
 	ContainerImage        string `json:"containerImage,omitempty"`
 	PrivilegeEscalated    bool   `json:"privilegeEscalated,omitempty"`
-	Background            bool   `json:"background,omitempty"`
+	// InFunction marks commands inside a shell function body: they run
+	// later, whenever the function is called.
+	InFunction bool `json:"inFunction,omitempty"`
+	Background bool `json:"background,omitempty"`
 }
 
 // WrapperInfo records that a simple command is a known wrapper that

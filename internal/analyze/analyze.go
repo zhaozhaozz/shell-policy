@@ -211,6 +211,9 @@ func mergeContext(child, parent ir.Context) ir.Context {
 	if parent.PrivilegeEscalated {
 		out.PrivilegeEscalated = true
 	}
+	if parent.InFunction {
+		out.InFunction = true
+	}
 	if parent.Background {
 		out.Background = true
 	}
@@ -218,6 +221,12 @@ func mergeContext(child, parent ir.Context) ir.Context {
 }
 
 func (a *Analyzer) analyzeSimple(c *ir.Command) {
+	a.analyzeProgram(c)
+	// `PATH=... cmd` or a bare `PATH=...` changes what runs.
+	c.Simple.Operations = append(c.Simple.Operations, assignmentOps(c)...)
+}
+
+func (a *Analyzer) analyzeProgram(c *ir.Command) {
 	sc := c.Simple
 	if sc.Program.Value == "" {
 		sc.NormalizedProgram = ""

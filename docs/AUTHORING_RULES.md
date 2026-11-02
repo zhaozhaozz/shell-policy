@@ -249,6 +249,8 @@ not: { ... }   # 取反
 | `path.scope`                  | string   | 当前匹配单元的路径范围，见第 7 节               |
 | `path.secretCandidate`        | bool     | 是否疑似敏感文件（.env / id_rsa / 凭证等）      |
 | `path.writable`               | bool     | 操作的**所有**路径是否都在可写白名单内          |
+| `path.absolute`               | string   | 当前路径的绝对形式（工作目录未知或 glob 时不存在）|
+| `path.normalized` / `path.raw` | string  | 规范化后的路径 / 命令里的原始写法，配合 `regex` |
 | `context.inPipeline`          | bool     | 是否在管道中                                    |
 | `context.inSubshell`          | bool     | 是否在子 shell 中                               |
 | `context.inCommandSubstitution` | bool   | 是否在 `$(...)` / 反引号中                       |
@@ -257,6 +259,7 @@ not: { ... }   # 取反
 | `context.inContainerCommand`  | bool     | 是否在容器（docker/podman/kubectl）中           |
 | `context.privilegeEscalated`  | bool     | 是否经 sudo 提权                                |
 | `context.background`          | bool     | 是否后台执行                                    |
+| `context.inFunction`          | bool     | 是否在 shell 函数体内（函数被调用时才执行）     |
 | `tags`                        | []string | 已累加的标签                                    |
 | `riskScore`                   | int      | 已累加的风险分                                  |
 
@@ -283,7 +286,12 @@ not: { ... }   # 取反
 `file_read` `file_list` `file_read_metadata` `file_write` `file_append`
 `file_delete` `file_move` `file_copy` `file_chmod` `file_chown`
 `process_exec` `network_read` `network_write` `git_read` `git_write`
-`container_read` `container_write` `remote_exec` `package_install` `unknown`
+`container_read` `container_write` `remote_exec` `package_install`
+`shell_config` `unknown`
+
+- `package_install`：包管理器的安装 / 卸载 / 升级类子命令（`apt install`、`pip install`、`npm i`、`pacman -S`、`npx` 等）；`npm run`、`go build` 这类不算。
+- `shell_config`：改变后续命令行为的 shell 状态：给 `PATH`、`CDPATH`、`HOME`、`PROMPT_COMMAND`、`PS1`、`LD_PRELOAD` 等变量赋值（`export`、`declare`、`unset`、`PATH=... cmd`、裸赋值），以及 `alias name=...`、`trap cmd SIG`、`hash -p`、`enable`、`bind`。`operation.target` 是变量名或命令名。
+- `cd`、`pushd`、`popd`、`pwd`、`echo`、`true`、`:`、`test`、`exit` 等内建命令以及普通变量的 `export` 不产生任何操作。
 
 ### path.scope
 `inside_workspace` `outside_workspace` `home` `system` `tmp`
@@ -354,8 +362,10 @@ not: { ... }   # 取反
   全部放行后 leaf 才是 allow。写 allow 规则时不要指望「顺带」放行同一命令的其他
   操作：例如 `cp src/a build/` 的读源文件需要 `allow-writable-dir-mutation-source`
   这样的规则单独覆盖。`explain` 里标 `[partial]` 的就是只放行了部分单元的 allow。
-- **regex 字段**：`path.normalizedRegex` / `path.rawRegex` 是规则内对路径做正则
-  匹配的专用入口，普通字段用 `regex` 操作符即可。
+- **路径正则**：对路径做正则匹配用 `path.absolute` / `path.normalized` /
+  `path.raw` 加 `regex` 操作符，例如 `path.absolute: { regex: "^/dev/sd" }`。
+  旧写法 `path.normalizedRegex` / `path.rawRegex` 分别等同于 `path.normalized` /
+  `path.raw`。
 
 ---
 

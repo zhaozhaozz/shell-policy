@@ -310,7 +310,8 @@ README 的读不能替对 `~/.bashrc` 的写放行，`cat README.md /etc/passwd`
 | `path.scope` | 路径 scope（见下） |
 | `path.secretCandidate` | 是否疑似 secret 路径 |
 | `path.writable` | 操作的全部路径是否都在可写目录内 |
-| `context.inRemoteCommand` / `context.inContainerCommand` / `context.privilegeEscalated` 等 | 上下文 |
+| `path.absolute` / `path.normalized` / `path.raw` | 当前路径字符串，配合 `regex` 使用 |
+| `context.inRemoteCommand` / `context.inContainerCommand` / `context.privilegeEscalated` / `context.inFunction` 等 | 上下文 |
 | `tags` / `riskScore` | 富集阶段累积的标签和风险分 |
 
 `path.scope` 取值：`inside_workspace` / `outside_workspace` / `home` /
@@ -413,14 +414,19 @@ plan.md               完整设计蓝图
 - Shell parser：`mvdan.cc/sh/v3/syntax`，支持 simple / pipeline / `&&` `||` `;` /
   background / subshell / command substitution / process substitution / 重定向。
 - AST → IR：独立的 IR 层，策略只对 IR 判断，不碰原始 AST。
-- Wrapper 递归解析：`sudo`、`env`、`time/command/builtin/exec/nohup`、
-  `bash/sh/zsh/... -c`、`ssh`、`docker/podman exec|run`、`kubectl exec`、
-  `find -exec`、`xargs`、`python/node/ruby/perl -c/-e`（inline eval）。
+- Wrapper 递归解析：`sudo` / `doas` / `pkexec` / `su -c`、`env`、`time/command/builtin/exec/nohup`、
+  `bash/sh/zsh/... -c`、`eval`（静态文本）、`ssh`、`docker/podman exec|run`、`kubectl exec`、
+  `find -exec`（`{}` 按搜索根目录下的文件分析）、`xargs`（来自 stdin 的参数视为动态）、
+  `python/node/ruby/perl -c/-e`（inline eval）。
+- 不会藏住命令的解析：`time cmd`、`coproc`、`export/declare/local X=$(cmd)`、
+  `[[ ]]` / `(( ))` / `let` 里的命令替换、`${X:-$(cmd)}`、重定向目标里的 `$(cmd)`、
+  shell 函数体（`context.inFunction`）都会展开成 leaf；单词里的反斜杠转义按 shell 语义去掉。
 - argv / flag 解析：短 flag 组合、长 flag、带值 flag、可重复 flag、`--` 分隔、
   动态参数标记。
 - Command spec：coreutils（`pwd ls cat head tail stat file echo printf grep find
-  rm mkdir touch cp mv chmod chown ln sed awk tar`）、`curl`/`wget`、`git`、
-  `docker`/`podman`。
+  rm mkdir touch cp mv chmod chown ln sed awk tar dd`）、`curl`/`wget`、`git`、
+  `docker`/`podman`、常见包管理器（`package_install`）、shell 内建与改变 shell
+  状态的命令（`shell_config`）。
 - 路径规范化：cwd/workspace/home/tmp/system scope 分类、glob/dynamic/stdin 标记、
   内置 secret-candidate 检测、**可写目录 allowlist**。
 - 规则链引擎：`enrich` / `decide` / `audit`、`terminal`、`addTags` / `addRisk` /

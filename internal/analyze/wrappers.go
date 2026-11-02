@@ -20,8 +20,12 @@ func (a *Analyzer) detectWrapper(c *ir.Command) *ir.WrapperInfo {
 	prog := sc.Program.Value
 
 	switch prog {
-	case "sudo":
+	case "sudo", "doas", "pkexec":
 		return a.wrapSudo(c)
+	case "su":
+		return a.wrapSu(c)
+	case "eval":
+		return a.wrapEval(c)
 	case "env":
 		return a.wrapEnv(c)
 	case "time", "command", "builtin", "exec", "nohup":
@@ -143,9 +147,12 @@ var sudoValueFlags = map[string]bool{
 	"-T": true, "--command-timeout": true, "-R": true, "--chroot": true,
 }
 
+// wrapSudo handles sudo and the sudo-like doas and pkexec: options, then the
+// command to run with elevated privileges.
 func (a *Analyzer) wrapSudo(c *ir.Command) *ir.WrapperInfo {
 	args := c.Simple.Argv[1:]
-	w := &ir.WrapperInfo{Type: "sudo", Outer: "sudo", Privilege: true}
+	prog := c.Simple.Program.Value
+	w := &ir.WrapperInfo{Type: "sudo", Outer: prog, Privilege: true}
 	// Consume sudo's own options; the first non-option word starts the
 	// command. Unknown options are skipped as boolean flags so that
 	// `sudo -n rm ...` still exposes `rm`.
@@ -194,6 +201,38 @@ func (a *Analyzer) wrapSudo(c *ir.Command) *ir.WrapperInfo {
 	w.InnerText = innerText
 	w.InnerCommand = a.parseInner(innerText, innerCtx)
 	return w
+}
+
+// wrapSu exposes the command of `su -c 'cmd' [user]`; a bare su opens a
+// privileged shell and stays a leaf.
+func (a *Analyzer) wrapSu(c *ir.Command) *ir.WrapperInfo {
+	cmd, _, ok := extractStringFlag(c.Simple.Argv[1:], "-c", "--command")
+	w := &ir.WrapperInfo{Type: "sudo", Outer: "su", Privilege: true}
+	if !ok {
+		return w
+	}
+	innerCtx := c.Context
+	innerCtx.PrivilegeEscalated = true
+	w.InnerText = cmd
+	w.InnerCommand = a.parseInner(cmd, innerCtx)
+	return w
+}
+
+// wrapEval parses the text of `eval` with static arguments as a command run
+// in the current shell. A dynamic eval stays an unknown command.
+func (a *Analyzer) wrapEval(c *ir.Command) *ir.WrapperInfo {
+	args := c.Simple.Argv[1:]
+	if len(args) == 0 {
+		return nil
+	}
+	for _, x := range args {
+		if x.Confidence != ir.ConfStatic {
+			return nil
+		}
+	}
+	// eval joins its arguments with spaces and parses the result.
+	text := joinArgvValues(args)
+	return &ir.WrapperInfo{Type: "eval", Outer: "eval", InnerText: text, InnerCommand: a.parseInner(text, c.Context)}
 }
 
 func consumeLeadingStringFlag(args []ir.ArgValue, names ...string) ([]ir.ArgValue, bool) {
@@ -545,6 +584,14 @@ func (a *Analyzer) wrapFindExec(c *ir.Command) *ir.WrapperInfo {
 				if args[j].Confidence == ir.ConfStatic && (args[j].Value == ";" || args[j].Value == "+") {
 					break
 				}
+				// {} stands for the matched files, which lie under the
+				// search roots: analyze it as "<root>/*" for each root.
+				if args[j].Confidence == ir.ConfStatic && args[j].Value == "{}" {
+					for _, root := range roots {
+						cmdArgs = append(cmdArgs, ir.ArgValue{Raw: rawText(root) + "/*", Value: root.Value + "/*", Confidence: root.Confidence})
+					}
+					continue
+				}
 				cmdArgs = append(cmdArgs, args[j])
 			}
 			if len(cmdArgs) == 0 {
@@ -552,6 +599,7 @@ func (a *Analyzer) wrapFindExec(c *ir.Command) *ir.WrapperInfo {
 			}
 			innerText := joinArgvText(cmdArgs)
 			inner := a.parseInner(innerText, c.Context)
+			markDynamicWords(inner, "{}")
 			return &ir.WrapperInfo{
 				Type:         "find_exec",
 				Outer:        "find " + v,
@@ -591,26 +639,20 @@ func findSearchRoots(args []ir.ArgValue) []ir.ArgValue {
 }
 
 func (a *Analyzer) wrapXargs(c *ir.Command) *ir.WrapperInfo {
-	args := c.Simple.Argv[1:]
-	// Strip xargs value flags.
-	for _, f := range []string{"-I", "-n", "-P", "-d", "-E", "-L", "-s", "--max-args", "--max-procs", "--delimiter"} {
-		for {
-			_, rest, ok := extractStringFlag(args, f)
-			if !ok {
-				break
-			}
-			args = rest
-		}
-	}
-	for _, f := range []string{"-r", "--no-run-if-empty", "-0", "--null", "-t", "--verbose", "-p"} {
-		_, args = extractBoolFlag(args, f)
-	}
+	args, replace := xargsCommand(c.Simple.Argv[1:])
 	if len(args) == 0 {
 		// xargs with no command defaults to /bin/echo, which is harmless.
 		return &ir.WrapperInfo{Type: "xargs", Outer: "xargs"}
 	}
 	innerText := joinArgvText(args)
 	inner := a.parseInner(innerText, c.Context)
+	// Arguments read from stdin are unknown: either the words carrying the
+	// -I replacement string, or extra arguments appended to the command.
+	if replace != "" {
+		markDynamicWords(inner, replace)
+	} else if inner != nil && inner.Kind == ir.KindSimple && inner.Simple != nil {
+		inner.Simple.Argv = append(inner.Simple.Argv, ir.ArgValue{Raw: "<stdin>", Confidence: ir.ConfDynamic})
+	}
 	return &ir.WrapperInfo{
 		Type:         "xargs",
 		Outer:        "xargs",
@@ -639,4 +681,82 @@ func (a *Analyzer) wrapLanguageEval(c *ir.Command, prog string) *ir.WrapperInfo 
 		// it would be misleading. The presence of the wrapper alone is
 		// the signal policy uses (template.inline-eval.ask-or-deny).
 	}
+}
+
+func rawText(a ir.ArgValue) string {
+	if a.Raw != "" {
+		return a.Raw
+	}
+	return a.Value
+}
+
+// markDynamicWords marks argv words and redirect targets of an inner command
+// that contain placeholder as dynamic: their value is only known at run time
+// (xargs -I input, a find {} embedded in a longer word).
+func markDynamicWords(c *ir.Command, placeholder string) {
+	mark := func(v *ir.ArgValue) {
+		if strings.Contains(v.Value, placeholder) || strings.Contains(v.Raw, placeholder) {
+			v.Confidence = ir.ConfDynamic
+			v.Value = ""
+		}
+	}
+	ir.Walk(c, func(n *ir.Command) {
+		if n.Simple != nil {
+			for i := range n.Simple.Argv {
+				mark(&n.Simple.Argv[i])
+			}
+			if len(n.Simple.Argv) > 0 {
+				n.Simple.Program = n.Simple.Argv[0]
+			}
+		}
+		for i := range n.Redirects {
+			mark(&n.Redirects[i].Target)
+		}
+	})
+}
+
+// xargsValueFlags take the next word (or an attached value) as their value.
+var xargsValueFlags = map[string]bool{"-I": true, "-n": true, "-P": true, "-d": true, "-E": true, "-L": true, "-s": true, "-a": true}
+
+// xargsCommand skips xargs's own leading options and returns the command
+// words plus the -I/-i replacement string ("" when not replacing).
+func xargsCommand(args []ir.ArgValue) ([]ir.ArgValue, string) {
+	replace := ""
+	for len(args) > 0 {
+		x := args[0]
+		if x.Confidence != ir.ConfStatic || !strings.HasPrefix(x.Value, "-") || x.Value == "-" {
+			break
+		}
+		args = args[1:]
+		v := x.Value
+		switch {
+		case v == "--":
+			return args, replace
+		case strings.HasPrefix(v, "--"):
+			// --replace[=R] and the other long options carry values inline.
+			if r, ok := strings.CutPrefix(v, "--replace"); ok && (r == "" || r[0] == '=') {
+				replace = strings.TrimPrefix(r, "=")
+				if replace == "" {
+					replace = "{}"
+				}
+			}
+		case strings.HasPrefix(v, "-i"):
+			replace = v[2:] // optional attached value
+			if replace == "" {
+				replace = "{}"
+			}
+		case xargsValueFlags[v[:2]]:
+			val := v[2:]
+			if val == "" && len(args) > 0 {
+				val = args[0].Value
+				args = args[1:]
+			}
+			if v[:2] == "-I" {
+				replace = val
+			}
+		}
+		// Other short options (-r, -0, -t, -p, -x, -e[E], -l[N]) are flags
+		// or carry attached values only.
+	}
+	return args, replace
 }

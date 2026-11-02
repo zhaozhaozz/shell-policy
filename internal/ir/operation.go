@@ -23,7 +23,10 @@ const (
 	OpContainerWrite   OpType = "container_write"
 	OpRemoteExec       OpType = "remote_exec"
 	OpPackageInstall   OpType = "package_install"
-	OpUnknown          OpType = "unknown"
+	// OpShellConfig changes shell state that alters how later commands run
+	// or what they execute: PATH, PROMPT_COMMAND, HOME, aliases, traps ...
+	OpShellConfig OpType = "shell_config"
+	OpUnknown     OpType = "unknown"
 )
 
 // PathScope classifies a path against the workspace / system context.

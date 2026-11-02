@@ -9,17 +9,6 @@ import (
 )
 
 func init() {
-	register([]string{"pwd"}, &commandSpec{
-		Argv: argv.Spec{},
-		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
-			return []ir.ResourceOp{{
-				Type:       ir.OpFileReadMetadata,
-				Confidence: ir.ConfStatic,
-				Context:    c.Context,
-			}}
-		},
-	})
-
 	register([]string{"ls", "dir"}, &commandSpec{
 		Argv: argv.Spec{
 			Flags: map[string]argv.FlagSpec{
@@ -371,6 +360,35 @@ func init() {
 					Dynamic:    p.HasDynamic,
 					Context:    c.Context,
 				})
+			}
+			return ops
+		},
+	})
+
+	// dd uses operand=value words: if= is read, of= is written.
+	register([]string{"dd"}, &commandSpec{
+		Argv: argv.Spec{},
+		Operations: func(c *ir.Command, p *argv.Parsed, r *paths.Resolver) []ir.ResourceOp {
+			var ops []ir.ResourceOp
+			for _, a := range p.Positionals {
+				key, val, ok := strings.Cut(a.Value, "=")
+				if a.Confidence == ir.ConfDynamic || !ok && a.Confidence != ir.ConfStatic {
+					// Unknown operand: may be of= anything.
+					ops = append(ops, ir.ResourceOp{Type: ir.OpFileWrite, Paths: pathsFromArgs([]ir.ArgValue{a}, r), Confidence: ir.ConfDynamic, Dynamic: true, Context: c.Context})
+					continue
+				}
+				opType := ir.OpType("")
+				switch key {
+				case "if":
+					opType = ir.OpFileRead
+				case "of":
+					opType = ir.OpFileWrite
+				}
+				if opType == "" {
+					continue
+				}
+				target := ir.ArgValue{Raw: val, Value: val, Confidence: a.Confidence}
+				ops = append(ops, ir.ResourceOp{Type: opType, Paths: pathsFromArgs([]ir.ArgValue{target}, r), Confidence: a.Confidence, Dynamic: a.Confidence != ir.ConfStatic, Context: c.Context})
 			}
 			return ops
 		},
