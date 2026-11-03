@@ -3,7 +3,7 @@ package analyze
 import (
 	"testing"
 
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 func leafNamed(t *testing.T, root *ir.Command, program string) *ir.Command {

@@ -1,4 +1,4 @@
-module github.com/self/shell_permission
+module github.com/zhaozhaozz/shell-policy
 
 go 1.26.3
 

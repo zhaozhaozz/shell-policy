@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 func arg(value string) ir.ArgValue {

@@ -15,12 +15,12 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/self/shell_permission/docs"
-	"github.com/self/shell_permission/internal/analyze"
-	"github.com/self/shell_permission/internal/ir"
-	"github.com/self/shell_permission/internal/paths"
-	"github.com/self/shell_permission/internal/policy"
-	"github.com/self/shell_permission/policies"
+	"github.com/zhaozhaozz/shell-policy/docs"
+	"github.com/zhaozhaozz/shell-policy/internal/analyze"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/policy"
+	"github.com/zhaozhaozz/shell-policy/policies"
 )
 
 // Effect is the final classification of a command.

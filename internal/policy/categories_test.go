@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/self/shell_permission/internal/analyze"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/analyze"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 // TestDefaultPolicyCategories walks the categories of the default policy

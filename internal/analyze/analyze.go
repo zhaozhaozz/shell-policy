@@ -13,10 +13,10 @@ package analyze
 import (
 	"strings"
 
-	"github.com/self/shell_permission/internal/argv"
-	"github.com/self/shell_permission/internal/ir"
-	"github.com/self/shell_permission/internal/parser"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/argv"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/parser"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 // Analyzer holds shared state required to enrich an IR tree.

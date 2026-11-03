@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 // cwdState is the analyzer's view of the shell's working directory while it

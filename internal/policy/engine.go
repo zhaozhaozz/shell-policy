@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/self/shell_permission/internal/audit"
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/audit"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 // Engine runs a Policy against an IR command tree.

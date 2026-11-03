@@ -14,7 +14,7 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 // ParseError is a structured parse error.

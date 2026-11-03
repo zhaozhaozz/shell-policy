@@ -9,7 +9,7 @@ package argv
 import (
 	"strings"
 
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 // FlagSpec describes a flag understood by a command.

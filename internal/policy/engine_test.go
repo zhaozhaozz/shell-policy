@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/self/shell_permission/internal/analyze"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/analyze"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 // aggregationPolicy has no catch-all rule: undecided leaves fall back to

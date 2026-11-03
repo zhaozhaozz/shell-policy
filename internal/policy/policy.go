@@ -17,8 +17,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/self/shell_permission/internal/ir"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 // Mode is the rule mode.

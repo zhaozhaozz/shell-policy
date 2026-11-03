@@ -25,14 +25,14 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/self/shell_permission/internal/analyze"
-	"github.com/self/shell_permission/internal/audit"
-	"github.com/self/shell_permission/internal/hooks/claudehook"
-	"github.com/self/shell_permission/internal/hooks/codexhook"
-	"github.com/self/shell_permission/internal/parser"
-	"github.com/self/shell_permission/internal/paths"
-	"github.com/self/shell_permission/internal/policy"
-	"github.com/self/shell_permission/policies"
+	"github.com/zhaozhaozz/shell-policy/internal/analyze"
+	"github.com/zhaozhaozz/shell-policy/internal/audit"
+	"github.com/zhaozhaozz/shell-policy/internal/hooks/claudehook"
+	"github.com/zhaozhaozz/shell-policy/internal/hooks/codexhook"
+	"github.com/zhaozhaozz/shell-policy/internal/parser"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/policy"
+	"github.com/zhaozhaozz/shell-policy/policies"
 )
 
 func main() {

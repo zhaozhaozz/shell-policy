@@ -4,8 +4,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/self/shell_permission/internal/ir"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 // gitReadOnly are subcommands that only read the repository whatever their

@@ -94,10 +94,10 @@ echo 'cat /etc/passwd' | ./bin/shell-policy eval --cwd "$PWD"
 
 ## 3. 作为 Go 库使用
 
-模块路径：`github.com/self/shell_permission`。其他 module 只能导入公共包 `shellpolicy`（引擎都在 `internal/` 下）：
+模块路径：`github.com/zhaozhaozz/shell-policy`。其他 module 只能导入公共包 `shellpolicy`（引擎都在 `internal/` 下）：
 
 ```go
-import "github.com/self/shell_permission/shellpolicy"
+import "github.com/zhaozhaozz/shell-policy/shellpolicy"
 
 func decide(ruleFile []byte, command, cwd, home string) (*shellpolicy.Result, error) {
     // 1. 规则文件：自定义 YAML，或用内置默认策略 shellpolicy.Default()

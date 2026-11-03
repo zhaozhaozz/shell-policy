@@ -3,9 +3,9 @@ package analyze
 import (
 	"strings"
 
-	"github.com/self/shell_permission/internal/argv"
-	"github.com/self/shell_permission/internal/ir"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/argv"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 // packageManagers maps a package manager to its subcommands that install,

@@ -3,8 +3,8 @@ package analyze
 import (
 	"strings"
 
-	"github.com/self/shell_permission/internal/ir"
-	"github.com/self/shell_permission/internal/parser"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/parser"
 )
 
 // detectWrapper checks whether the given simple command is a known

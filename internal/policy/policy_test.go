@@ -5,8 +5,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/self/shell_permission/internal/analyze"
-	"github.com/self/shell_permission/internal/paths"
+	"github.com/zhaozhaozz/shell-policy/internal/analyze"
+	"github.com/zhaozhaozz/shell-policy/internal/paths"
 )
 
 func TestDefaultPolicyDecisionsForRepresentativeCommands(t *testing.T) {

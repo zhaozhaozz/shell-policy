@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/self/shell_permission/internal/ir"
+	"github.com/zhaozhaozz/shell-policy/internal/ir"
 )
 
 // Matcher is a tree of conditions evaluated against a leaf state.
